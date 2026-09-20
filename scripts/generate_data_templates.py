@@ -3,8 +3,8 @@
 Writes per-account folders under data/<ACCOUNT>/:
   - test_plan_info.csv
   - location_info.csv
-  - convert_table.csv   (24 case combos + Sheet_Name; single index file)
-  - test_item_sequence_all_cases.xlsx  (24 sheets: Case_01 … Case_24)
+  - convert_table.csv   (32 case combos; Standard × … × systems 1–2)
+  - test_item_sequence_all_cases.xlsx  (32 sheets: Case_01 … Case_32)
 """
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ from openpyxl.styles import Alignment, Font, PatternFill
 ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / "data"
 ACCOUNTS = ["ROSA", "NAOMI"]
+STANDARDS = ['EIA - 19"', 'OCP - 21"']
 
 # ---------------------------------------------------------------------------
 # Sample Test Plan Info Table (user can replace / extend)
@@ -71,24 +72,30 @@ LOCATION_ROWS = [
 
 
 def all_case_combinations() -> list[dict]:
-    """2 * 2 * 2 * 3 = 24 combinations with convert IDs 1..24."""
+    """
+    2 * 2 * 2 * 2 * 2 = 32 combinations (Convert_ID 1..32).
+    Dimensions: Standard × Functionality × Gold_Rail × Ufit_SoR × System_Number(1–2).
+    Systems 3–10: no template — user fills the timeline manually.
+    """
     rows: list[dict] = []
     convert_id = 1
-    for functionality in ("Functional", "Non-functional"):
-        for gold_rail in ("Yes", "No"):
-            for ufit_sor in ("Yes", "No"):
-                for system_number in (1, 2, 3):
-                    rows.append(
-                        {
-                            "Functionality": functionality,
-                            "Gold_Rail_Selection": gold_rail,
-                            "Ufit_for_SoR": ufit_sor,
-                            "System_Number": system_number,
-                            "Convert_ID": convert_id,
-                            "Sheet_Name": f"Case_{convert_id:02d}",
-                        }
-                    )
-                    convert_id += 1
+    for standard in STANDARDS:
+        for functionality in ("Functional", "Non-functional"):
+            for gold_rail in ("Yes", "No"):
+                for ufit_sor in ("Yes", "No"):
+                    for system_number in (1, 2):
+                        rows.append(
+                            {
+                                "Standard": standard,
+                                "Functionality": functionality,
+                                "Gold_Rail_Selection": gold_rail,
+                                "Ufit_for_SoR": ufit_sor,
+                                "System_Number": system_number,
+                                "Convert_ID": convert_id,
+                                "Sheet_Name": f"Case_{convert_id:02d}",
+                            }
+                        )
+                        convert_id += 1
     return rows
 
 
@@ -132,15 +139,20 @@ def write_account_data(account: str) -> dict[str, Path]:
         obsolete_index.unlink()
 
     # Sequence workbook: one sheet per Convert_ID
-    # Format: Row | Sequence  where Sequence = "1, T003, T004, 5, T010"
+    # Format: Row | 1 | 2 | 3 | …  (one token per cell; add more numbered columns in Excel as needed)
     wb = Workbook()
     default = wb.active
     wb.remove(default)
 
+    # Starter columns only — not a hard limit; loader reads every numbered column present
+    starter_steps = 50
+    step_headers = [str(i) for i in range(1, starter_steps + 1)]
     header_note = (
-        "Sequence tokens (comma-separated): integer = blank fillable days after ETA; "
-        "Test_ID = run that item (duration from test_plan_info.csv). "
-        "Example: 1, T003, T004, T006, 5, T010  → blank 1 day, then T003, T004, T006, "
+        "Column A = system label (rename freely, e.g. DUT-A / Chamber-1). "
+        "One token per cell under columns 1, 2, 3, … (add more numbered columns if needed). "
+        "Integer = blank fillable days after ETA; Test_ID = run that item "
+        "(duration from test_plan_info.csv). "
+        "Example: 1 | T003 | T004 | T006 | 5 | T010 → blank 1 day, then T003, T004, T006, "
         "blank 5 days, then T010."
     )
 
@@ -151,15 +163,15 @@ def write_account_data(account: str) -> dict[str, Path]:
 
         meta = (
             f"Convert_ID={case['Convert_ID']} | "
+            f"Standard={case['Standard']} | "
             f"Functionality={case['Functionality']} | "
             f"Gold_Rail={case['Gold_Rail_Selection']} | "
             f"Ufit_SoR={case['Ufit_for_SoR']} | "
             f"Systems={n_sys}"
         )
-        ws.append([meta, ""])
-        ws.append([header_note, ""])
-        ws.append(["Row", "Sequence"])
-        # Style header row (Excel row 3)
+        ws.append([meta] + [""] * starter_steps)
+        ws.append([header_note] + [""] * starter_steps)
+        ws.append(["Row"] + step_headers)
         fill = PatternFill("solid", fgColor="1F4E79")
         font = Font(color="FFFFFF", bold=True)
         for cell in ws[3]:
@@ -168,10 +180,11 @@ def write_account_data(account: str) -> dict[str, Path]:
             cell.alignment = Alignment(horizontal="center", wrap_text=True)
 
         for s in range(1, n_sys + 1):
-            ws.append([f"System {s}", ""])
+            ws.append([f"System {s}"] + [""] * starter_steps)
 
         ws.column_dimensions["A"].width = 14
-        ws.column_dimensions["B"].width = 72
+        for idx in range(2, min(starter_steps + 2, 22)):
+            ws.column_dimensions[ws.cell(row=3, column=idx).column_letter].width = 10
         ws.row_dimensions[2].height = 48
         ws["A2"].alignment = Alignment(wrap_text=True, vertical="top")
 

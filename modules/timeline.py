@@ -7,7 +7,7 @@ from typing import Any
 import pandas as pd
 
 from modules.config import EMPTY_LABEL, EMPTY_TOKEN
-from modules.data_loader import load_taiwan_holidays, parse_sequence_tokens, test_info_by_id
+from modules.data_loader import load_taiwan_holidays, tokens_from_sequence_row, test_info_by_id
 
 BLOCKED_FILL = "#ffcdd2"  # light red for weekend / holiday columns
 
@@ -141,7 +141,7 @@ def calendar_locked_dates(timeline: dict[str, Any]) -> set[str]:
 def refresh_blocked(timeline: dict[str, Any]) -> None:
     """
     blocked = Weekend/Holiday ∪ user Empty marks.
-    Also sync 'Empty' into markers for the Marked display row.
+    Also sync 'Empty' into markers for the Event display row.
     """
     locked = calendar_locked_dates(timeline)
     empty = set(timeline.get("empty_marks", []))
@@ -171,14 +171,17 @@ def init_timeline_state(
     dates = daterange(start, end)
     markers = build_markers(dates, system_eta, critical_feedback, holidays)
     grid: dict[str, dict[str, dict | None]] = {}
+    system_order: list[str] = []
     for s in range(1, n_systems + 1):
         row_key = f"System {s}"
         grid[row_key] = {d.isoformat(): None for d in dates}
+        system_order.append(row_key)
     tl = {
         "dates": [d.isoformat() for d in dates],
         "markers": markers,
         "empty_marks": [],
         "grid": grid,
+        "system_order": system_order,
         "n_systems": n_systems,
         "system_eta": system_eta.isoformat(),
         "critical_feedback": critical_feedback.isoformat(),
@@ -186,6 +189,74 @@ def init_timeline_state(
     }
     refresh_blocked(tl)
     return tl
+
+
+def sorted_system_keys(timeline: dict[str, Any]) -> list[str]:
+    """Stable system row order (supports custom names, not only 'System N')."""
+    grid = timeline.get("grid", {})
+    order = timeline.get("system_order") or []
+    if order:
+        seen: set[str] = set()
+        out: list[str] = []
+        for k in order:
+            if k in grid and k not in seen:
+                out.append(k)
+                seen.add(k)
+        for k in grid:
+            if k not in seen:
+                out.append(k)
+        return out
+
+    def _key(name: str):
+        parts = str(name).split()
+        if parts and parts[-1].isdigit():
+            return (0, int(parts[-1]), name.lower())
+        return (1, 0, name.lower())
+
+    return sorted(grid.keys(), key=_key)
+
+
+_RESERVED_SYSTEM_NAMES = frozenset(
+    {
+        "",
+        "row",
+        "empty",
+        "marked",
+        "event",
+        "weekday",
+        "date",
+        "week",
+    }
+)
+
+
+def rename_system_row(
+    timeline: dict[str, Any], old_name: str, new_name: str
+) -> tuple[dict[str, Any], str | None]:
+    """Rename a system row key in grid + system_order. Returns (timeline, error)."""
+    old_name = str(old_name or "").strip()
+    new_name = str(new_name or "").strip()
+    if not old_name:
+        return timeline, "Missing system to rename."
+    if old_name not in timeline.get("grid", {}):
+        return timeline, f"Unknown system row: {old_name}"
+    if not new_name:
+        return timeline, "System name cannot be empty."
+    if new_name.lower() in _RESERVED_SYSTEM_NAMES:
+        return timeline, f"'{new_name}' is reserved."
+    if new_name == old_name:
+        return timeline, None
+    if new_name in timeline["grid"]:
+        return timeline, f"Name '{new_name}' is already used by another row."
+
+    new_tl = deepcopy(timeline)
+    new_tl["grid"][new_name] = new_tl["grid"].pop(old_name)
+    order = list(new_tl.get("system_order") or [])
+    new_tl["system_order"] = [new_name if k == old_name else k for k in order]
+    if new_name not in new_tl["system_order"]:
+        # Keep position if old_name was missing from order
+        new_tl["system_order"] = sorted_system_keys(new_tl)
+    return new_tl, None
 
 
 def extend_timeline_to(timeline: dict[str, Any], new_end: date) -> dict[str, Any]:
@@ -466,7 +537,7 @@ def postpone_system_schedules(timeline: dict[str, Any]) -> tuple[dict[str, Any],
     refresh_blocked(new_tl)
     errors: list[str] = []
 
-    for row_key in sorted(new_tl["grid"].keys(), key=lambda x: int(x.split()[-1])):
+    for row_key in sorted_system_keys(new_tl):
         placements = extract_row_placements(new_tl, row_key)
         for d in list(new_tl["grid"][row_key].keys()):
             new_tl["grid"][row_key][d] = None
@@ -711,13 +782,85 @@ def shift_system_from_date(
     return trial, []
 
 
+def refresh_durations_from_catalog(
+    timeline: dict[str, Any],
+    info: dict[str, dict],
+) -> tuple[dict[str, Any], list[str]]:
+    """
+    Re-apply each placed test item using Duration_Days from `info` (loaded catalog).
+
+    Keeps the current schedule sequence: same items, same original start dates
+    (and blank gaps). Does NOT reload the Case sequence template.
+
+    If a longer duration would collide with a later item, that later item is
+    pushed forward (never earlier than its original start).
+    """
+    new_tl = deepcopy(timeline)
+    refresh_blocked(new_tl)
+    errors: list[str] = []
+
+    for row_key in sorted_system_keys(new_tl):
+        placements = extract_row_placements(new_tl, row_key)
+        if not placements:
+            continue
+
+        for d in list(new_tl["grid"][row_key].keys()):
+            new_tl["grid"][row_key][d] = None
+
+        earliest_free: str | None = None
+        for p in placements:
+            tid = str(p.get("test_id") or "")
+            is_empty = bool(p.get("is_empty"))
+            if is_empty:
+                dur = 1
+                abbrv = p.get("abbrv") or EMPTY_LABEL
+            else:
+                meta = info.get(tid)
+                if meta:
+                    dur = int(meta["Duration_Days"])
+                    abbrv = meta.get("Abbrv_Name") or p.get("abbrv") or tid
+                else:
+                    dur = int(p["duration"])
+                    abbrv = p.get("abbrv") or tid
+                    errors.append(
+                        f"{row_key}: {tid} not in loaded data — kept previous duration."
+                    )
+
+            min_start = p["original_start"]
+            if earliest_free and earliest_free > min_start:
+                min_start = earliest_free
+
+            new_tl, err, last = _place_never_earlier(
+                new_tl,
+                row_key,
+                min_start,
+                tid,
+                abbrv,
+                dur,
+                is_empty,
+            )
+            if err:
+                errors.append(err)
+                continue
+            if last and last in new_tl["dates"]:
+                li = new_tl["dates"].index(last)
+                earliest_free = (
+                    new_tl["dates"][li + 1]
+                    if li + 1 < len(new_tl["dates"])
+                    else last
+                )
+
+    refresh_blocked(new_tl)
+    return new_tl, errors
+
+
 def set_calendar_empty_mark(
     timeline: dict[str, Any],
     day: str,
     enabled: bool,
 ) -> tuple[dict[str, Any], list[str]]:
     """
-    Toggle Empty on the Marked row for a day.
+    Toggle Empty on the Event row for a day.
     When enabling Empty: that day cannot be filled; existing plans keep their
     original start (never earlier) and skip Empty days while keeping duration.
     """
@@ -791,19 +934,19 @@ def editor_cell_label(cell: dict | None) -> str:
 def timeline_calendar_df(timeline: dict[str, Any]) -> pd.DataFrame:
     """
     Single merged calendar table (Excel-like):
-      Date | Weekday | Marked | System 1 | System 2 | ...
+      Date | Weekday | Event | System 1 | System 2 | ...
     """
     dates = timeline["dates"]
     markers = timeline["markers"]
     grid = timeline["grid"]
-    system_keys = sorted(grid.keys(), key=lambda x: int(x.split()[-1]))
+    system_keys = sorted_system_keys(timeline)
 
     rows = []
     for d in dates:
         row = {
             "Date": d,
             "Weekday": date.fromisoformat(d).strftime("%a"),
-            "Marked": " | ".join(markers.get(d, [])),
+            "Event": " | ".join(markers.get(d, [])),
         }
         for sk in system_keys:
             row[sk] = editor_cell_label(grid[sk].get(d))
@@ -825,7 +968,7 @@ def style_calendar_df(df: pd.DataFrame, timeline: dict[str, Any]):
 
 # Keep aliases used by export preview styling of wide format
 def timeline_header_df(timeline: dict[str, Any]) -> pd.DataFrame:
-    """Read-only Weekday + Marked rows (wide format)."""
+    """Read-only Weekday + Event rows (wide format)."""
     dates = timeline["dates"]
     markers = timeline["markers"]
     weekdays = [date.fromisoformat(d).strftime("%a") for d in dates]
@@ -833,7 +976,7 @@ def timeline_header_df(timeline: dict[str, Any]) -> pd.DataFrame:
     return pd.DataFrame(
         [
             {"Row": "Weekday", **{d: weekdays[i] for i, d in enumerate(dates)}},
-            {"Row": "Marked", **{d: marks[i] for i, d in enumerate(dates)}},
+            {"Row": "Event", **{d: marks[i] for i, d in enumerate(dates)}},
         ]
     )
 
@@ -843,7 +986,7 @@ def timeline_editor_df(timeline: dict[str, Any]) -> pd.DataFrame:
     dates = timeline["dates"]
     grid = timeline["grid"]
     rows = []
-    for row_key in sorted(grid.keys(), key=lambda x: int(x.split()[-1])):
+    for row_key in sorted_system_keys(timeline):
         row = {"Row": row_key}
         for d in dates:
             row[d] = editor_cell_label(grid[row_key].get(d))
@@ -855,7 +998,7 @@ def timeline_to_export_df(timeline: dict[str, Any]) -> pd.DataFrame:
     """
     Export layout:
       Row 0: Date
-      Row 1: Marked (Holiday / Weekend / System ETA / Critical Feedback)
+      Row 1: Event (Holiday / Weekend / System ETA / Critical Feedback)
       Row 2+: System 1..N
     """
     dates = timeline["dates"]
@@ -864,14 +1007,14 @@ def timeline_to_export_df(timeline: dict[str, Any]) -> pd.DataFrame:
 
     rows: list[dict[str, str]] = []
     date_row = {"Row": "Date"}
-    mark_row = {"Row": "Marked"}
+    mark_row = {"Row": "Event"}
     for d in dates:
         date_row[d] = format_date_display(d)
         mark_row[d] = " | ".join(markers.get(d, []))
     rows.append(date_row)
     rows.append(mark_row)
 
-    for row_key in sorted(grid.keys(), key=lambda x: int(x.split()[-1])):
+    for row_key in sorted_system_keys(timeline):
         r = {"Row": row_key}
         for d in dates:
             cell = grid[row_key].get(d)
@@ -903,9 +1046,9 @@ def timeline_to_display_df(timeline: dict[str, Any]) -> pd.DataFrame:
         marks.append(" | ".join(markers.get(d, [])))
     rows = [
         {"Row": "Weekday", **{d: weekdays[i] for i, d in enumerate(dates)}},
-        {"Row": "Marked", **{d: marks[i] for i, d in enumerate(dates)}},
+        {"Row": "Event", **{d: marks[i] for i, d in enumerate(dates)}},
     ]
-    for row_key in sorted(grid.keys(), key=lambda x: int(x.split()[-1])):
+    for row_key in sorted_system_keys(timeline):
         row = {"Row": row_key}
         for d in dates:
             row[d] = display_label(grid[row_key].get(d))
@@ -941,10 +1084,10 @@ def apply_sequence_template(
     """
     Pre-fill timeline from an All-Case sequence sheet.
 
-    Preferred format — one Sequence cell per system row, e.g.:
-      1, T003, T004, T006, 5, T010
-    Meaning (from ETA / start_from_date on fillable days):
-      blank 1 day → T003 → T004 → T006 → blank 5 days → T010
+    Preferred format — one token per cell (columns 1, 2, 3, …):
+      Row | 1 | 2 | 3 | 4 | 5 | 6
+      DUT-A | 1 | T003 | T004 | T006 | 5 | T010
+    Column A may be any system label (not only "System 1"). Those names are used on the timeline.
     Integers = blank fillable days; Test_ID = place that item (Duration_Days from catalog).
     """
     if info is None:
@@ -965,7 +1108,6 @@ def apply_sequence_template(
                 break
 
     row_col = "Row" if "Row" in sequence_df.columns else sequence_df.columns[0]
-    has_sequence_col = "Sequence" in sequence_df.columns
 
     def _ensure_cursor(tl: dict[str, Any], cursor: int, fill: list[str]) -> tuple[dict[str, Any], list[str]]:
         while cursor >= len(fill):
@@ -979,86 +1121,26 @@ def apply_sequence_template(
                     break
         return tl, fill
 
-    for _, seq_row in sequence_df.iterrows():
-        row_name = str(seq_row.get(row_col, "")).strip()
-        if not row_name.startswith("System"):
-            continue
-        if row_name not in new_tl["grid"]:
-            continue
-
-        cursor = start_idx
-
-        if has_sequence_col:
-            tokens = parse_sequence_tokens(seq_row.get("Sequence"))
-            for token in tokens:
-                new_tl, fillable = _ensure_cursor(new_tl, cursor, fillable)
-                if cursor >= len(fillable):
-                    errors.append(f"Ran out of dates for {row_name}.")
-                    break
-
-                # Integer → blank N fillable days
-                if token.isdigit() or (token.startswith("-") and token[1:].isdigit()):
-                    blank_days = int(token)
-                    if blank_days < 0:
-                        errors.append(f"{row_name}: negative blank count '{token}' ignored.")
-                        continue
-                    cursor += blank_days
-                    new_tl, fillable = _ensure_cursor(new_tl, cursor, fillable)
-                    continue
-
-                tid = token.strip()
-                if tid.upper() == EMPTY_TOKEN or tid.lower() == "empty":
-                    # explicit Empty mark (blocks fills) — rare; prefer numeric blanks
-                    place_date = fillable[cursor]
-                    new_tl, err = place_item(
-                        new_tl, row_name, place_date, EMPTY_TOKEN, EMPTY_LABEL, 1, True
-                    )
-                    if err:
-                        errors.append(err)
-                    fillable = fillable_dates(new_tl)
-                    cursor += 1
-                    continue
-
-                meta = info.get(tid)
-                if not meta:
-                    errors.append(f"Unknown Test_ID '{tid}' in sequence for {row_name}.")
-                    continue
-                place_date = fillable[cursor]
-                dur = int(meta["Duration_Days"])
-                new_tl, fillable = _ensure_cursor(new_tl, cursor + dur - 1, fillable)
-                new_tl, err = place_item(
-                    new_tl,
-                    row_name,
-                    place_date,
-                    meta["Test_ID"],
-                    meta["Abbrv_Name"],
-                    dur,
-                    False,
-                )
-                if err:
-                    errors.append(f"{row_name} @ {place_date}: {err}")
-                    cursor += 1
-                else:
-                    fillable = fillable_dates(new_tl)
-                    cursor += dur
-            continue
-
-        # Legacy Day_1 / Day_2 … column layout (if Sequence column missing)
-        day_cols = [c for c in sequence_df.columns if str(c).startswith("Day_")]
-        if not day_cols:
-            continue
-        for col in day_cols:
+    def _apply_tokens(row_name: str, tokens: list[str], cursor: int) -> int:
+        nonlocal new_tl, fillable, errors
+        for token in tokens:
             new_tl, fillable = _ensure_cursor(new_tl, cursor, fillable)
             if cursor >= len(fillable):
                 errors.append(f"Ran out of dates for {row_name}.")
                 break
-            raw = seq_row.get(col)
-            if pd.isna(raw) or str(raw).strip() == "":
-                cursor += 1
+
+            if token.isdigit() or (token.startswith("-") and token[1:].isdigit()):
+                blank_days = int(token)
+                if blank_days < 0:
+                    errors.append(f"{row_name}: negative blank count '{token}' ignored.")
+                    continue
+                cursor += blank_days
+                new_tl, fillable = _ensure_cursor(new_tl, cursor, fillable)
                 continue
-            token = str(raw).strip()
-            place_date = fillable[cursor]
-            if token.upper() == EMPTY_TOKEN or token.lower() == "empty":
+
+            tid = token.strip()
+            if tid.upper() == EMPTY_TOKEN or tid.lower() == "empty":
+                place_date = fillable[cursor]
                 new_tl, err = place_item(
                     new_tl, row_name, place_date, EMPTY_TOKEN, EMPTY_LABEL, 1, True
                 )
@@ -1067,12 +1149,14 @@ def apply_sequence_template(
                 fillable = fillable_dates(new_tl)
                 cursor += 1
                 continue
-            meta = info.get(token)
+
+            meta = info.get(tid)
             if not meta:
-                errors.append(f"Unknown Test_ID '{token}' in sequence for {row_name}.")
-                cursor += 1
+                errors.append(f"Unknown Test_ID '{tid}' in sequence for {row_name}.")
                 continue
+            place_date = fillable[cursor]
             dur = int(meta["Duration_Days"])
+            new_tl, fillable = _ensure_cursor(new_tl, cursor + dur - 1, fillable)
             new_tl, err = place_item(
                 new_tl,
                 row_name,
@@ -1084,6 +1168,113 @@ def apply_sequence_template(
             )
             if err:
                 errors.append(f"{row_name} @ {place_date}: {err}")
+                cursor += 1
+            else:
+                fillable = fillable_dates(new_tl)
+                cursor += dur
+        return cursor
+
+    # Collect sequence rows — first column may be any label (not only "System N")
+    skip_names = {
+        "",
+        "row",
+        "empty",
+        "marked",
+        "event",
+        "weekday",
+        "date",
+        "week",
+    }
+    seq_entries: list[tuple[str, list[str], Any]] = []
+    for _, seq_row in sequence_df.iterrows():
+        row_name = str(seq_row.get(row_col, "")).strip()
+        if not row_name or row_name.lower() in skip_names:
+            continue
+        tokens = tokens_from_sequence_row(seq_row, sequence_df.columns)
+        seq_entries.append((row_name, tokens, seq_row))
+
+    if not seq_entries:
+        return new_tl, errors
+
+    # Remap timeline rows by order: sequence row 1 → first system, etc.
+    # Custom names from the sheet replace default "System 1", "System 2", …
+    old_keys = sorted_system_keys(new_tl)
+    dates = list(new_tl["dates"])
+    new_grid: dict[str, dict] = {}
+    new_order: list[str] = []
+    used_names: set[str] = set()
+
+    for i, old_key in enumerate(old_keys):
+        if i < len(seq_entries):
+            name = seq_entries[i][0]
+            # Avoid duplicate keys
+            base = name
+            n = 2
+            while name in used_names:
+                name = f"{base} ({n})"
+                n += 1
+        else:
+            name = old_key
+            while name in used_names:
+                name = f"{name}_"
+        used_names.add(name)
+        new_grid[name] = {d: None for d in dates}
+        new_order.append(name)
+
+    new_tl["grid"] = new_grid
+    new_tl["system_order"] = new_order
+    new_tl["n_systems"] = len(new_order)
+
+    for i, (row_name, tokens, seq_row) in enumerate(seq_entries):
+        if i >= len(new_order):
+            break
+        target = new_order[i]
+        cursor = start_idx
+        if tokens:
+            _apply_tokens(target, tokens, cursor)
+            continue
+
+        # Legacy Day_1 / Day_2 … calendar-slot layout
+        day_cols = [c for c in sequence_df.columns if str(c).startswith("Day_")]
+        if not day_cols:
+            continue
+        for col in day_cols:
+            new_tl, fillable = _ensure_cursor(new_tl, cursor, fillable)
+            if cursor >= len(fillable):
+                errors.append(f"Ran out of dates for {target}.")
+                break
+            raw = seq_row.get(col)
+            if pd.isna(raw) or str(raw).strip() == "":
+                cursor += 1
+                continue
+            token = str(raw).strip()
+            place_date = fillable[cursor]
+            if token.upper() == EMPTY_TOKEN or token.lower() == "empty":
+                new_tl, err = place_item(
+                    new_tl, target, place_date, EMPTY_TOKEN, EMPTY_LABEL, 1, True
+                )
+                if err:
+                    errors.append(err)
+                fillable = fillable_dates(new_tl)
+                cursor += 1
+                continue
+            meta = info.get(token)
+            if not meta:
+                errors.append(f"Unknown Test_ID '{token}' in sequence for {target}.")
+                cursor += 1
+                continue
+            dur = int(meta["Duration_Days"])
+            new_tl, err = place_item(
+                new_tl,
+                target,
+                place_date,
+                meta["Test_ID"],
+                meta["Abbrv_Name"],
+                dur,
+                False,
+            )
+            if err:
+                errors.append(f"{target} @ {place_date}: {err}")
                 cursor += 1
             else:
                 fillable = fillable_dates(new_tl)

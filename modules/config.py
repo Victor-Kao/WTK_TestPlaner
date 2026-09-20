@@ -10,7 +10,10 @@ ACCOUNTS = ["ROSA", "NAOMI"]
 PHASES = ["Concept", "BCT", "NOT"]
 FUNCTIONALITY_OPTS = ["Functional", "Non-functional"]
 YES_NO = ["Yes", "No"]
-SYSTEM_NUMBERS = [1, 2, 3]
+SYSTEM_NUMBERS = list(range(1, 11))  # 1…10 systems on the timeline
+# Convert table + Case sequence sheets only define templates through this many systems
+SEQUENCE_TEMPLATE_MAX_SYSTEMS = 2
+STANDARDS = ['EIA - 19"', 'OCP - 21"']
 
 EMPTY_TOKEN = "EMPTY"
 EMPTY_LABEL = "Empty"

@@ -9,6 +9,8 @@ import streamlit.components.v1 as components
 
 from modules.config import CELL_AHEAD_OPT, CELL_POSTPONE_OPT
 
+from modules.timeline import sorted_system_keys
+
 _FRONTEND = Path(__file__).parent / "frontend"
 _component = components.declare_component("synced_calendar", path=str(_FRONTEND))
 
@@ -27,6 +29,7 @@ def render_synced_calendar(
       - {kind: "mark_empty", date, value, nonce}  value is "" or "Empty"
       - {kind: "shift_system", system, delta, nonce}  whole-row ±1
       - {kind: "shift_from_date", system, date, delta, nonce}  from selected date ±1
+      - {kind: "rename_system", system, name, nonce}  rename row label
     """
     dates: list[str] = list(timeline.get("dates", []))
     markers: dict = timeline.get("markers", {})
@@ -46,7 +49,7 @@ def render_synced_calendar(
     marks = [" | ".join(markers.get(d, [])) for d in dates]
 
     systems = []
-    for name in sorted(grid.keys(), key=lambda x: int(x.split()[-1])):
+    for name in sorted_system_keys(timeline):
         cells = {}
         for d in dates:
             cell = grid[name].get(d)

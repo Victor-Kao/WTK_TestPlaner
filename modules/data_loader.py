@@ -52,14 +52,19 @@ def lookup_convert_id(
     gold_rail: str,
     ufit_sor: str,
     system_number: int,
+    *,
+    standard: str | None = None,
+    convert_df: pd.DataFrame | None = None,
 ) -> int | None:
-    df = load_convert_table(account)
+    df = convert_df if convert_df is not None else load_convert_table(account)
     mask = (
         (df["Functionality"] == functionality)
         & (df["Gold_Rail_Selection"] == gold_rail)
         & (df["Ufit_for_SoR"] == ufit_sor)
-        & (df["System_Number"] == int(system_number))
+        & (df["System_Number"].astype(int) == int(system_number))
     )
+    if standard is not None and "Standard" in df.columns:
+        mask = mask & (df["Standard"] == standard)
     hits = df.loc[mask]
     if hits.empty:
         return None
@@ -69,12 +74,14 @@ def lookup_convert_id(
 def load_case_sequence(account: str, convert_id: int) -> pd.DataFrame | None:
     """
     Load sequence template for a Convert_ID from the account workbook
-    (one sheet per case: Case_01 … Case_24).
+    (one sheet per case: Case_01 … Case_32; Standard × … × systems 1–2 only).
 
-    Sheet layout (header on Excel row 3):
-      Row | Sequence
-      System 1 | 1, T003, T004, T006, 5, T010
-    Tokens: integer = blank fillable days; Test_ID = run that item (uses Duration_Days).
+    Sheet layout (header on Excel row 3) — one token per column:
+      Row | 1 | 2 | 3 | 4 | 5 | …
+      DUT-A | 1 | T003 | T004 | T006 | 5 | T010
+    Column A is the system label (any name; used on the timeline).
+    Tokens: integer = blank fillable days; Test_ID = run that item (Duration_Days).
+    Add as many numbered columns as needed — there is no fixed step limit.
     """
     xlsx = account_paths(account)["sequence_xlsx"]
     if not xlsx.exists():
@@ -87,8 +94,56 @@ def load_case_sequence(account: str, convert_id: int) -> pd.DataFrame | None:
         return None
 
 
+def sequence_step_columns(columns) -> list:
+    """Ordered step columns (1, 2, 3… or Step_1…). Skips Row / Sequence / Day_*."""
+    numbered: list[tuple[int, Any]] = []
+    other: list[Any] = []
+    for c in columns:
+        s = str(c).strip()
+        low = s.lower()
+        if low in ("row", "sequence") or s.startswith("Unnamed"):
+            continue
+        if s.startswith("Day_"):
+            continue
+        if s.isdigit():
+            numbered.append((int(s), c))
+        elif low.startswith("step_") and s[5:].isdigit():
+            numbered.append((int(s[5:]), c))
+        elif low.startswith("step") and s[4:].isdigit():
+            numbered.append((int(s[4:]), c))
+        else:
+            other.append(c)
+    if numbered:
+        return [c for _, c in sorted(numbered, key=lambda x: x[0])]
+    return other
+
+
+def tokens_from_sequence_row(seq_row: Any, columns) -> list[str]:
+    """
+    Collect sequence tokens from a system row.
+    Prefer one-token-per-cell step columns; fall back to legacy comma Sequence cell.
+    Empty cells are skipped (not treated as blank days).
+    """
+    step_cols = sequence_step_columns(columns)
+    if step_cols:
+        tokens: list[str] = []
+        for c in step_cols:
+            raw = seq_row.get(c) if hasattr(seq_row, "get") else seq_row[c]
+            if raw is None or (isinstance(raw, float) and pd.isna(raw)):
+                continue
+            text = str(raw).strip()
+            if not text:
+                continue
+            tokens.append(text)
+        return tokens
+    cols = list(columns)
+    if "Sequence" in cols:
+        return parse_sequence_tokens(seq_row.get("Sequence"))
+    return []
+
+
 def parse_sequence_tokens(raw: Any) -> list[str]:
-    """Split a Sequence cell into tokens (commas / whitespace)."""
+    """Legacy: split a single Sequence cell into tokens (commas / whitespace)."""
     if raw is None or (isinstance(raw, float) and pd.isna(raw)):
         return []
     text = str(raw).strip()

@@ -34,6 +34,8 @@ def build_nre_table(
     qty_per_item: int = 1,
     *,
     account: str,
+    test_plan_df: pd.DataFrame | None = None,
+    location_df: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """
     Build NRE rows:
@@ -41,8 +43,10 @@ def build_nre_table(
       Phase | Functionality | Gold_Rail_Selection | Ufit_for_SoR | Final_Fee
     One row per (test_id × phase).
     """
-    info = test_info_by_id(account=account)
-    loc = load_location_info(account).set_index("Test_ID")["Location"].to_dict()
+    plan = test_plan_df if test_plan_df is not None else load_test_plan_info(account)
+    loc_df = location_df if location_df is not None else load_location_info(account)
+    info = test_info_by_id(plan)
+    loc = loc_df.set_index("Test_ID")["Location"].to_dict()
     rows: list[dict] = []
 
     for phase in phases:
@@ -148,12 +152,13 @@ def default_test_ids_for_filters(
     ufit_sor: str,
     *,
     account: str,
+    test_plan_df: pd.DataFrame | None = None,
 ) -> list[str]:
     """
     Heuristic pool filter for NRE when timeline is empty.
     Uses abbrv / name cues from sample catalog; user can override selection.
     """
-    df = load_test_plan_info(account)
+    df = test_plan_df if test_plan_df is not None else load_test_plan_info(account)
     ids = set(df["Test_ID"].astype(str))
 
     # Always include baseline items

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <style>
     :root {
-      --label-w: 108px;
+      --label-w: 132px;
       --date-w: 112px;
       --row-h: 38px;
       --gap: 28px;
@@ -122,6 +122,28 @@
       padding-left: 10px !important;
     }
     td.label-col { background: #fafbfc; }
+    input.sys-name-input {
+      width: 100%;
+      max-width: calc(var(--label-w) - 16px);
+      height: 28px;
+      border: 1px solid transparent;
+      border-radius: 4px;
+      background: transparent;
+      font-weight: 600;
+      font-size: 12px;
+      color: var(--title);
+      padding: 2px 4px;
+      text-align: left;
+    }
+    input.sys-name-input:hover {
+      border-color: #c5c9d0;
+      background: #fff;
+    }
+    input.sys-name-input:focus {
+      outline: none;
+      border-color: #90a4ae;
+      background: #fff;
+    }
     .date-col {
       width: var(--date-w) !important;
       min-width: var(--date-w) !important;
@@ -154,7 +176,8 @@
   <div class="wrap">
     <p class="hint">
       Scroll any table horizontally — all tables stay aligned.
-      In Marked, choose Empty to lock that day (stays white) and postpone plans later — never earlier.
+      Click the first-column name (System 1, …) to rename the row.
+      In Event, choose Empty to lock that day (stays white) and postpone plans later — never earlier.
       Only Weekend / Holiday columns are light red.
     </p>
     <div id="root"></div>
@@ -336,6 +359,34 @@
           });
         });
       });
+      root.querySelectorAll("input.sys-name-input").forEach((inp) => {
+        if (inp.dataset.bound === "1") return;
+        inp.dataset.bound = "1";
+        const commit = () => {
+          const oldName = inp.getAttribute("data-system") || "";
+          const next = (inp.value || "").trim();
+          if (!next || next === oldName) {
+            inp.value = oldName;
+            return;
+          }
+          setComponentValue({
+            kind: "rename_system",
+            system: oldName,
+            name: next,
+            nonce: Date.now(),
+          });
+        };
+        inp.addEventListener("keydown", (e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            inp.blur();
+          } else if (e.key === "Escape") {
+            inp.value = inp.getAttribute("data-system") || "";
+            inp.blur();
+          }
+        });
+        inp.addEventListener("blur", commit);
+      });
     }
 
     function buildHtml(dates, weekdays, marks, calBlockedSet, emptySet, systems, options) {
@@ -354,8 +405,8 @@
       });
       html += `</tr>`;
 
-      // Marked row includes Empty option (merged)
-      html += `<tr><td class="label-col">Marked</td>`;
+      // Event row includes Empty option (merged)
+      html += `<tr><td class="label-col">Event</td>`;
       dates.forEach((d, i) => {
         if (calBlockedSet.has(d)) {
           html += `<td class="date-col blocked"><div class="marked-cell">${esc(marks[i] || "")}</div></td>`;
@@ -382,7 +433,7 @@
         html += `<div class="h-scroll"><table class="cal">`;
         html += colgroup(dates.length);
         html += `<thead>${dateHeaders(dates, redSet)}</thead><tbody>`;
-        html += `<tr><td class="label-col">${esc(sys.name)}</td>`;
+        html += `<tr><td class="label-col"><input class="sys-name-input" type="text" data-system="${esc(sys.name)}" value="${esc(sys.name)}" title="Rename system row" /></td>`;
         dates.forEach((d) => {
           const isRed = redSet.has(d);
           const isEmpty = emptySet.has(d);

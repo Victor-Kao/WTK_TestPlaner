@@ -124,31 +124,41 @@ Each account has its own folder (`data/ROSA/`, `data/NAOMI/`):
 |------|---------|
 | `test_plan_info.csv` | Test_ID, Testplan_Item, Duration_Days, Abbrv_Name, Lab_Fee |
 | `location_info.csv` | Test_ID → Location (for NRE) |
-| `convert_table.csv` | 24 case combos → Convert_ID + Sheet_Name (single index) |
-| `test_item_sequence_all_cases.xlsx` | 24 sheets (`Case_01` … `Case_24`); one **Sequence** cell per system |
+| `convert_table.csv` | 32 case combos → Convert_ID + Sheet_Name (Standard × … × systems 1–2) |
+| `test_item_sequence_all_cases.xlsx` | 32 sheets (`Case_01` … `Case_32`); one token per cell |
 
-### Convert dimensions (2×2×2×3 = 24)
+### Convert dimensions (2×2×2×2×2 = 32)
 
+- Standard: **EIA - 19"** / **OCP - 21"**
 - Functionality: Functional / Non-functional
 - Gold Rail Selection: Yes / No
 - U-fit for SoR: Yes / No
-- System Number: 1 / 2 / 3
+- System Number: **1 / 2** (templates only)
+
+The timeline UI allows **1–10** systems. From **3** systems up, fill the timeline manually.
 
 ### Sequence sheet format
 
-Each system row has one `Sequence` cell (comma-separated tokens):
+Each system row uses columns **1, 2, 3, …** (one token per cell). Add more numbered columns in Excel anytime — there is no step limit; the app reads all of them.
+
+The first column (**Row**) can be renamed from `System 1` / `System 2` to any label (e.g. `DUT-A`). Those names appear on the timeline after pre-fill.
+
+| Row | 1 | 2 | 3 | 4 | 5 | 6 |
+|-----|---|---|---|---|---|---|
+| DUT-A | 1 | T003 | T004 | T006 | 5 | T010 |
 
 - **Integer** → that many **blank** fillable days (after System ETA)
 - **Test_ID** → run that item next (length = `Duration_Days` from `test_plan_info.csv`)
 
-Example: `1, T003, T004, T006, 5, T010` → blank 1 day, then T003, T004, T006, blank 5 days, then T010.
+Example above → blank 1 day, then T003, T004, T006, blank 5 days, then T010.
 
 ## Flow
 
-1. Select account (**ROSA** or **NAOMI**) and system weight.
+1. On the main page, set **Account**, **System weight**, and **Standard**, then click **Start Arranging Test Plan** (no app sidebar — reserved for a parent tool).
 2. Set phase, functional type, U-fit, System ETA, critical feedback, # systems, gold rail.
 3. **Generate Test Plan** → timeline with weekdays, weekends, Taiwan holidays, ETA, feedback.
-4. Select a cell → assign a test item (or use Marked row for Empty). Same-row no overlap; multi-day duration auto-spans.
-5. **Update** → export table (Date / Marked / System rows) → download CSV.
+4. Select a cell → assign a test item (or use Event row for Empty). Same-row no overlap; multi-day duration auto-spans.
+5. **Update** → export table (Date / Event / System rows) → download CSV.
 6. **NRE Estimation** tab → multi-phase fees → download XLSX from template.
-7. Headcount tab is TBD.
+7. **Data preview** at the bottom of the page is collapsed by default.
+8. Headcount tab is TBD.
