@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <style>
+    :root {
+      --label-w: 108px;
+      --date-w: 112px;
+      --row-h: 38px;
+      --gap: 28px;
+      --blocked: #ffcdd2;
+      --border: #c5c9d0;
+      --head-bg: #f0f2f6;
+      --title: #1f2937;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Source Sans Pro", "Segoe UI", sans-serif;
+      font-size: 13px;
+      color: var(--title);
+      background: transparent;
+    }
+    .wrap { padding: 4px 2px 8px; }
+    .hint {
+      font-size: 12px;
+      color: #5e6a78;
+      margin: 0 0 10px;
+    }
+    .block-title {
+      font-weight: 650;
+      font-size: 13px;
+      margin: 0 0 6px 2px;
+      color: #334155;
+    }
+    .block-title-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin: 0 0 6px 2px;
+    }
+    .block-title-row .block-title {
+      margin: 0;
+    }
+    .sys-actions {
+      display: flex;
+      gap: 6px;
+      flex-shrink: 0;
+    }
+    .sys-actions button {
+      font-size: 12px;
+      padding: 4px 10px;
+      border-radius: 4px;
+      cursor: pointer;
+      white-space: nowrap;
+      color: #1f2937;
+    }
+    .sys-actions button.sys-ahead {
+      background: #c8e6c9;
+      border: 1px solid #81c784;
+    }
+    .sys-actions button.sys-ahead:hover {
+      background: #a5d6a7;
+      border-color: #66bb6a;
+    }
+    .sys-actions button.sys-postpone {
+      background: #ffe0b2;
+      border: 1px solid #ffb74d;
+    }
+    .sys-actions button.sys-postpone:hover {
+      background: #ffcc80;
+      border-color: #ffa726;
+    }
+    .sys-actions button:active {
+      filter: brightness(0.95);
+    }
+    .table-block { margin-bottom: var(--gap); }
+    .table-block:last-child { margin-bottom: 4px; }
+    .h-scroll {
+      overflow-x: auto;
+      overflow-y: hidden;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: #fff;
+      width: 100%;
+    }
+    table.cal {
+      border-collapse: collapse;
+      table-layout: fixed;
+      width: max-content;
+      min-width: 100%;
+    }
+    table.cal th,
+    table.cal td {
+      border: 1px solid var(--border);
+      height: var(--row-h);
+      padding: 2px 4px;
+      vertical-align: middle;
+      text-align: center;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      background: #fff;
+    }
+    table.cal th {
+      background: var(--head-bg);
+      font-weight: 600;
+      font-size: 11px;
+    }
+    .label-col {
+      width: var(--label-w) !important;
+      min-width: var(--label-w) !important;
+      max-width: var(--label-w) !important;
+      position: sticky;
+      left: 0;
+      z-index: 2;
+      background: var(--head-bg);
+      font-weight: 600;
+      text-align: left !important;
+      padding-left: 10px !important;
+    }
+    td.label-col { background: #fafbfc; }
+    .date-col {
+      width: var(--date-w) !important;
+      min-width: var(--date-w) !important;
+      max-width: var(--date-w) !important;
+    }
+    .blocked {
+      background: var(--blocked) !important;
+    }
+    th.blocked { background: #ef9a9a !important; }
+    select.cell-select,
+    select.mark-empty-select {
+      width: 100%;
+      max-width: calc(var(--date-w) - 10px);
+      height: 28px;
+      border: 1px solid #b0b7c3;
+      border-radius: 4px;
+      background: #fff;
+      font-size: 12px;
+    }
+    .marked-cell {
+      font-size: 11px;
+      white-space: normal;
+      line-height: 1.2;
+      max-height: var(--row-h);
+      overflow: hidden;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <p class="hint">
+      Scroll any table horizontally — all tables stay aligned.
+      In Marked, choose Empty to lock that day (stays white) and postpone plans later — never earlier.
+      Only Weekend / Holiday columns are light red.
+    </p>
+    <div id="root"></div>
+  </div>
+  <script>
+    function sendMessage(type, data) {
+      window.parent.postMessage(
+        Object.assign({ isStreamlitMessage: true, type: type }, data || {}),
+        "*"
+      );
+    }
+    function setFrameHeight(height) {
+      sendMessage("streamlit:setFrameHeight", { height: height });
+    }
+    function setComponentValue(value) {
+      sendMessage("streamlit:setComponentValue", { value: value });
+    }
+    function onRender(event) {
+      if (!event.data || event.data.type !== "streamlit:render") return;
+      render(event.data.args || {});
+    }
+    window.addEventListener("message", onRender);
+    sendMessage("streamlit:componentReady", { apiVersion: 1 });
+
+    function esc(s) {
+      return String(s ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    function colgroup(nDates) {
+      let html = `<colgroup><col class="label-col" />`;
+      for (let i = 0; i < nDates; i++) html += `<col class="date-col" />`;
+      html += `</colgroup>`;
+      return html;
+    }
+
+    function formatDate(d) {
+      return String(d || "").replace(/-/g, "/");
+    }
+
+    function dateHeaders(dates, redSet) {
+      let html = `<tr><th class="label-col">Row</th>`;
+      dates.forEach((d) => {
+        const shown = formatDate(d);
+        const cls = redSet.has(d) ? "date-col blocked" : "date-col";
+        html += `<th class="${cls}" title="${esc(shown)}">${esc(shown)}</th>`;
+      });
+      html += `</tr>`;
+      return html;
+    }
+
+    function wireSyncScroll(root) {
+      const scrolls = Array.from(root.querySelectorAll(".h-scroll"));
+      let locking = false;
+      scrolls.forEach((el) => {
+        el.addEventListener("scroll", () => {
+          if (locking) return;
+          locking = true;
+          const x = el.scrollLeft;
+          scrolls.forEach((other) => {
+            if (other !== el) other.scrollLeft = x;
+          });
+          locking = false;
+        });
+      });
+    }
+
+    let lastStructureKey = null;
+    let scrollX = 0;
+
+    function structureKey(dates, systems, blocked, emptyMarks, calendarBlocked) {
+      return JSON.stringify({
+        dates,
+        blocked,
+        emptyMarks,
+        calendarBlocked,
+        systems: (systems || []).map((s) => s.name),
+      });
+    }
+
+    function saveScroll(root) {
+      const el = root.querySelector(".h-scroll");
+      if (el) scrollX = el.scrollLeft;
+    }
+
+    function restoreScroll(root) {
+      root.querySelectorAll(".h-scroll").forEach((el) => {
+        el.scrollLeft = scrollX;
+      });
+    }
+
+    function cleanAutoMark(markText) {
+      return String(markText || "")
+        .replace(/\s*\|\s*Empty\b/g, "")
+        .replace(/^Empty$/, "")
+        .trim();
+    }
+
+    function patchValues(root, systems, emptyMarks, marks, dates) {
+      const emptySet = new Set(emptyMarks || []);
+      root.querySelectorAll("select.mark-empty-select").forEach((sel) => {
+        const d = sel.getAttribute("data-date");
+        const idx = dates.indexOf(d);
+        const auto = cleanAutoMark(idx >= 0 ? marks[idx] : "");
+        const want = emptySet.has(d) ? "Empty" : "";
+        if (sel.options.length >= 1) {
+          sel.options[0].text = auto || "—";
+        }
+        if (sel.value !== want) sel.value = want;
+      });
+      (systems || []).forEach((sys) => {
+        const cells = sys.cells || {};
+        Object.keys(cells).forEach((d) => {
+          const sel = root.querySelector(
+            `select.cell-select[data-system="${CSS.escape(sys.name)}"][data-date="${CSS.escape(d)}"]`
+          );
+          if (sel && sel.value !== cells[d]) sel.value = cells[d];
+          if (sel) sel.dataset.prevValue = sel.value;
+        });
+      });
+    }
+
+    function bindSelects(root, shiftAheadOpt, shiftPostponeOpt) {
+      root.querySelectorAll("select.cell-select").forEach((sel) => {
+        if (sel.dataset.bound === "1") return;
+        sel.dataset.bound = "1";
+        sel.dataset.prevValue = sel.value;
+        sel.addEventListener("focus", () => {
+          sel.dataset.prevValue = sel.value;
+        });
+        sel.addEventListener("change", () => {
+          const v = sel.value;
+          if (v === shiftAheadOpt || v === shiftPostponeOpt) {
+            setComponentValue({
+              kind: "shift_from_date",
+              system: sel.getAttribute("data-system"),
+              date: sel.getAttribute("data-date"),
+              delta: v === shiftAheadOpt ? -1 : 1,
+              nonce: Date.now(),
+            });
+            // Keep showing the cell's real value (do not stick on Ahead/Postpone)
+            sel.value = sel.dataset.prevValue || "";
+            return;
+          }
+          sel.dataset.prevValue = v;
+          setComponentValue({
+            kind: "system",
+            system: sel.getAttribute("data-system"),
+            date: sel.getAttribute("data-date"),
+            value: v,
+            nonce: Date.now(),
+          });
+        });
+      });
+      root.querySelectorAll("select.mark-empty-select").forEach((sel) => {
+        if (sel.dataset.bound === "1") return;
+        sel.dataset.bound = "1";
+        sel.addEventListener("change", () => {
+          setComponentValue({
+            kind: "mark_empty",
+            date: sel.getAttribute("data-date"),
+            value: sel.value,
+            nonce: Date.now(),
+          });
+        });
+      });
+      root.querySelectorAll("button.sys-shift").forEach((btn) => {
+        if (btn.dataset.bound === "1") return;
+        btn.dataset.bound = "1";
+        btn.addEventListener("click", () => {
+          setComponentValue({
+            kind: "shift_system",
+            system: btn.getAttribute("data-system"),
+            delta: Number(btn.getAttribute("data-delta") || 0),
+            nonce: Date.now(),
+          });
+        });
+      });
+    }
+
+    function buildHtml(dates, weekdays, marks, calBlockedSet, emptySet, systems, options) {
+      const redSet = calBlockedSet; // only Weekend / Holiday are light red
+      let html = "";
+      html += `<div class="table-block">`;
+      html += `<div class="block-title">Calendar marks</div>`;
+      html += `<div class="h-scroll"><table class="cal">`;
+      html += colgroup(dates.length);
+      html += `<thead>${dateHeaders(dates, redSet)}</thead><tbody>`;
+
+      html += `<tr><td class="label-col">Weekday</td>`;
+      dates.forEach((d, i) => {
+        const cls = redSet.has(d) ? "date-col blocked" : "date-col";
+        html += `<td class="${cls}">${esc(weekdays[i] || "")}</td>`;
+      });
+      html += `</tr>`;
+
+      // Marked row includes Empty option (merged)
+      html += `<tr><td class="label-col">Marked</td>`;
+      dates.forEach((d, i) => {
+        if (calBlockedSet.has(d)) {
+          html += `<td class="date-col blocked"><div class="marked-cell">${esc(marks[i] || "")}</div></td>`;
+        } else {
+          const isEmpty = emptySet.has(d);
+          const auto = cleanAutoMark(marks[i]);
+          const label0 = auto || "—";
+          html += `<td class="date-col"><select class="mark-empty-select" data-date="${esc(d)}">`;
+          html += `<option value=""${isEmpty ? "" : " selected"}>${esc(label0)}</option>`;
+          html += `<option value="Empty"${isEmpty ? " selected" : ""}>Empty</option>`;
+          html += `</select></td>`;
+        }
+      });
+      html += `</tr></tbody></table></div></div>`;
+
+      systems.forEach((sys) => {
+        html += `<div class="table-block">`;
+        html += `<div class="block-title-row">`;
+        html += `<div class="block-title">${esc(sys.name)}</div>`;
+        html += `<div class="sys-actions">`;
+        html += `<button type="button" class="sys-shift sys-ahead" data-system="${esc(sys.name)}" data-delta="-1">Ahead 1 day (−1)</button>`;
+        html += `<button type="button" class="sys-shift sys-postpone" data-system="${esc(sys.name)}" data-delta="1">Postpone 1 day (+1)</button>`;
+        html += `</div></div>`;
+        html += `<div class="h-scroll"><table class="cal">`;
+        html += colgroup(dates.length);
+        html += `<thead>${dateHeaders(dates, redSet)}</thead><tbody>`;
+        html += `<tr><td class="label-col">${esc(sys.name)}</td>`;
+        dates.forEach((d) => {
+          const isRed = redSet.has(d);
+          const isEmpty = emptySet.has(d);
+          const locked = isRed || isEmpty;
+          const cls = isRed ? "date-col blocked" : "date-col";
+          const val = (sys.cells && sys.cells[d]) || "";
+          if (locked) {
+            html += `<td class="${cls}"></td>`;
+          } else {
+            html += `<td class="${cls}"><select class="cell-select" data-system="${esc(sys.name)}" data-date="${esc(d)}">`;
+            options.forEach((opt) => {
+              const selected = opt === val ? " selected" : "";
+              const label = opt === "" ? "—" : opt;
+              html += `<option value="${esc(opt)}"${selected}>${esc(label)}</option>`;
+            });
+            html += `</select></td>`;
+          }
+        });
+        html += `</tr></tbody></table></div></div>`;
+      });
+      return html;
+    }
+
+    function render(args) {
+      const dates = args.dates || [];
+      const weekdays = args.weekdays || [];
+      const marks = args.marks || [];
+      const blocked = args.blocked || [];
+      const calendarBlocked = args.calendar_blocked || [];
+      const emptyMarks = args.empty_marks || [];
+      const systems = args.systems || [];
+      const options = args.options || [""];
+      const shiftAheadOpt = args.shift_ahead_opt || "◀ Ahead (−1) from here";
+      const shiftPostponeOpt = args.shift_postpone_opt || "Postpone (+1) from here ▶";
+      const calBlockedSet = new Set(calendarBlocked);
+      const emptySet = new Set(emptyMarks);
+      const root = document.getElementById("root");
+      const sk = structureKey(dates, systems, blocked, emptyMarks, calendarBlocked);
+
+      if (sk === lastStructureKey && root.dataset.ready === "1") {
+        saveScroll(root);
+        patchValues(root, systems, emptyMarks, marks, dates);
+        restoreScroll(root);
+        return;
+      }
+
+      saveScroll(root);
+      root.innerHTML = buildHtml(
+        dates, weekdays, marks, calBlockedSet, emptySet, systems, options
+      );
+      root.dataset.ready = "1";
+      lastStructureKey = sk;
+      wireSyncScroll(root);
+      bindSelects(root, shiftAheadOpt, shiftPostponeOpt);
+      restoreScroll(root);
+
+      const nSys = systems.length;
+      const height =
+        56 + 28 + (38 * 3 + 8) + nSys * (28 + 38 * 2 + 8) + Math.max(0, nSys) * 28 + 24;
+      setFrameHeight(height);
+    }
+  </script>
+</body>
+</html>
