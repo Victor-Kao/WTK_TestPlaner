@@ -22,13 +22,32 @@ from modules.config import (
 def load_test_plan_info(account: str) -> pd.DataFrame:
     path = account_paths(account)["test_plan_info"]
     df = pd.read_csv(path)
-    required = ["Test_ID", "Testplan_Item", "Duration_Days", "Abbrv_Name", "Lab_Fee"]
+    required = [
+        "Test_ID",
+        "Testplan_Item",
+        "Duration_Days",
+        "Duration_for_NRE",
+        "Abbrv_Name",
+        "Lab_Rate",
+    ]
+    # Migrate older CSVs that stored a flat Lab_Fee instead of rate × hours
+    if "Lab_Rate" not in df.columns and "Lab_Fee" in df.columns:
+        days = df["Duration_Days"].astype(int).clip(lower=1)
+        if "Duration_for_NRE" not in df.columns:
+            df["Duration_for_NRE"] = days * 8
+        hours = pd.to_numeric(df["Duration_for_NRE"], errors="coerce").fillna(1).clip(lower=1)
+        old_fee = pd.to_numeric(df["Lab_Fee"], errors="coerce").fillna(0)
+        df["Lab_Rate"] = (old_fee / hours).round(2)
+        df = df.drop(columns=["Lab_Fee"])
+    if "Duration_for_NRE" not in df.columns:
+        df["Duration_for_NRE"] = df["Duration_Days"].astype(int).clip(lower=1) * 8
     missing = [c for c in required if c not in df.columns]
     if missing:
         raise ValueError(f"{path.name} missing columns: {missing}")
     df["Test_ID"] = df["Test_ID"].astype(str).str.strip()
     df["Duration_Days"] = df["Duration_Days"].astype(int)
-    df["Lab_Fee"] = pd.to_numeric(df["Lab_Fee"], errors="coerce").fillna(0)
+    df["Duration_for_NRE"] = pd.to_numeric(df["Duration_for_NRE"], errors="coerce").fillna(0)
+    df["Lab_Rate"] = pd.to_numeric(df["Lab_Rate"], errors="coerce").fillna(0)
     return df
 
 
@@ -296,7 +315,8 @@ def test_info_by_id(
             "Test_ID": str(row["Test_ID"]),
             "Testplan_Item": row["Testplan_Item"],
             "Duration_Days": int(row["Duration_Days"]),
+            "Duration_for_NRE": float(row["Duration_for_NRE"]),
             "Abbrv_Name": row["Abbrv_Name"],
-            "Lab_Fee": float(row["Lab_Fee"]),
+            "Lab_Rate": float(row["Lab_Rate"]),
         }
     return out

@@ -2,6 +2,9 @@
 
 Streamlit schedule tool for brand test plans (ROSA, NAOMI), timeline editing, NRE estimate, and case templates.
 
+**ROSA** — full Test Plan Timeline + NRE flows are implemented.  
+**NAOMI** — different workflow; Test Plan / NRE / Headcount are TBD placeholders for now.
+
 ## Requirements
 
 - Python 3.10+ recommended
@@ -122,7 +125,7 @@ Each account has its own folder (`data/ROSA/`, `data/NAOMI/`):
 
 | File | Purpose |
 |------|---------|
-| `test_plan_info.csv` | Test_ID, Testplan_Item, Duration_Days, Abbrv_Name, Lab_Fee |
+| `test_plan_info.csv` | Test_ID, Testplan_Item, Duration_Days (timeline days), Duration_for_NRE (billable hours), Abbrv_Name, Lab_Rate (per hour) |
 | `location_info.csv` | Test_ID → Location (for NRE) |
 | `convert_table.csv` | 32 case combos → Convert_ID + Sheet_Name (Standard × … × systems 1–2) |
 | `test_item_sequence_all_cases.xlsx` | 32 sheets (`Case_01` … `Case_32`); one token per cell |
@@ -132,7 +135,7 @@ Each account has its own folder (`data/ROSA/`, `data/NAOMI/`):
 - Standard: **EIA - 19"** / **OCP - 21"**
 - Functionality: Functional / Non-functional
 - Gold Rail Selection: Yes / No
-- U-fit for SoR: Yes / No
+- U-fit for L10.5 SoR / ORv3 mini Rack: Yes / No
 - System Number: **1 / 2** (templates only)
 
 The timeline UI allows **1–10** systems. From **3** systems up, fill the timeline manually.
@@ -155,10 +158,10 @@ Example above → blank 1 day, then T003, T004, T006, blank 5 days, then T010.
 ## Flow
 
 1. On the main page, set **Account**, **System weight**, and **Standard**, then click **Start Arranging Test Plan** (no app sidebar — reserved for a parent tool).
-2. Set phase, functional type, U-fit, System ETA, critical feedback, # systems, gold rail.
+2. Set System ETA, critical feedback, # systems (left); functional type, U-fit, gold rail (right).
 3. **Generate Test Plan** → timeline with weekdays, weekends, Taiwan holidays, ETA, feedback.
 4. Select a cell → assign a test item (or use Event row for Empty). Same-row no overlap; multi-day duration auto-spans.
 5. **Update** → export table (Date / Event / System rows) → download CSV.
-6. **NRE Estimation** tab → multi-phase fees → download XLSX from template.
+6. **NRE Estimation** tab → pick phases → each phase section sets functionality / gold rail / U-fit / test items → generate & download.
 7. **Data preview** at the bottom of the page is collapsed by default.
 8. Headcount tab is TBD.

@@ -1,21 +1,21 @@
-Test_ID,Testplan_Item,Duration_Days,Abbrv_Name,Lab_Fee
-T001,System Boot Functional Check,1,Boot-FC,15000
-T002,Power Rail Bring-up,2,PWR-BU,25000
-T003,Thermal Soak Test,3,THM-SK,40000
-T004,Signal Integrity Sweep,2,SI-SW,35000
-T005,ORV3 Connector Validation,2,ORV3-CV,30000
-T006,System on Rail Fit Check,1,SoR-Fit,20000
-T007,Gold Rail Alignment,2,GR-ALN,28000
-T008,Gold Rail Continuity,1,GR-CON,18000
-T009,Functional Stress Run,3,FNC-ST,45000
-T010,Non-Functional Endurance,4,NF-END,50000
-T011,Concept Smoke Test,1,CPT-SM,12000
-T012,BCT Full Sequence,5,BCT-FS,80000
-T013,NOT Regression Pack,3,NOT-RG,55000
-T014,EMI / EMC Scan,2,EMI-SC,42000
-T015,Acoustic Noise Profile,1,ACQ-NP,16000
-T016,Idle Power Baseline,1,IDL-PW,14000
-T017,Peak Load Characterization,2,PK-LD,32000
-T018,Failover / Recovery,2,FO-RC,36000
-T019,Firmware Flash Verify,1,FW-FV,10000
-T020,Mechanical Fit Gauge,1,MECH-FG,22000
+Test_ID,Testplan_Item,Duration_Days,Duration_for_NRE,Abbrv_Name,Lab_Rate
+T001,System Boot Functional Check,1,8,Boot-FC,1875.0
+T002,Power Rail Bring-up,2,16,PWR-BU,1562.5
+T003,Thermal Soak Test,3,24,THM-SK,1666.67
+T004,Signal Integrity Sweep,2,16,SI-SW,2187.5
+T005,ORV3 Connector Validation,2,16,ORV3-CV,1875.0
+T006,System on Rail Fit Check,1,8,SoR-Fit,2500.0
+T007,Gold Rail Alignment,2,16,GR-ALN,1750.0
+T008,Gold Rail Continuity,1,8,GR-CON,2250.0
+T009,Functional Stress Run,3,24,FNC-ST,1875.0
+T010,Non-Functional Endurance,4,32,NF-END,1562.5
+T011,Concept Smoke Test,1,8,CPT-SM,1500.0
+T012,BCT Full Sequence,5,40,BCT-FS,2000.0
+T013,NOT Regression Pack,3,24,NOT-RG,2291.67
+T014,EMI / EMC Scan,2,16,EMI-SC,2625.0
+T015,Acoustic Noise Profile,1,8,ACQ-NP,2000.0
+T016,Idle Power Baseline,1,8,IDL-PW,1750.0
+T017,Peak Load Characterization,2,16,PK-LD,2000.0
+T018,Failover / Recovery,2,16,FO-RC,2250.0
+T019,Firmware Flash Verify,1,8,FW-FV,1250.0
+T020,Mechanical Fit Gauge,1,8,MECH-FG,2750.0

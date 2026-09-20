@@ -21,29 +21,32 @@ STANDARDS = ['EIA - 19"', 'OCP - 21"']
 
 # ---------------------------------------------------------------------------
 # Sample Test Plan Info Table (user can replace / extend)
-# Columns: Test_ID, Testplan_Item, Duration_Days, Abbrv_Name, Lab_Fee
+# Columns: Test_ID, Testplan_Item, Duration_Days, Duration_for_NRE, Abbrv_Name, Lab_Rate
+# Duration_Days = timeline days; Duration_for_NRE = billable hours; Lab_Rate = NT$/hr
+# Lab fee for NRE = Duration_for_NRE * Lab_Rate
 # ---------------------------------------------------------------------------
 TEST_PLAN_ROWS = [
-    ("T001", "System Boot Functional Check", 1, "Boot-FC", 15000),
-    ("T002", "Power Rail Bring-up", 2, "PWR-BU", 25000),
-    ("T003", "Thermal Soak Test", 3, "THM-SK", 40000),
-    ("T004", "Signal Integrity Sweep", 2, "SI-SW", 35000),
-    ("T005", "ORV3 Connector Validation", 2, "ORV3-CV", 30000),
-    ("T006", "System on Rail Fit Check", 1, "SoR-Fit", 20000),
-    ("T007", "Gold Rail Alignment", 2, "GR-ALN", 28000),
-    ("T008", "Gold Rail Continuity", 1, "GR-CON", 18000),
-    ("T009", "Functional Stress Run", 3, "FNC-ST", 45000),
-    ("T010", "Non-Functional Endurance", 4, "NF-END", 50000),
-    ("T011", "Concept Smoke Test", 1, "CPT-SM", 12000),
-    ("T012", "BCT Full Sequence", 5, "BCT-FS", 80000),
-    ("T013", "NOT Regression Pack", 3, "NOT-RG", 55000),
-    ("T014", "EMI / EMC Scan", 2, "EMI-SC", 42000),
-    ("T015", "Acoustic Noise Profile", 1, "ACQ-NP", 16000),
-    ("T016", "Idle Power Baseline", 1, "IDL-PW", 14000),
-    ("T017", "Peak Load Characterization", 2, "PK-LD", 32000),
-    ("T018", "Failover / Recovery", 2, "FO-RC", 36000),
-    ("T019", "Firmware Flash Verify", 1, "FW-FV", 10000),
-    ("T020", "Mechanical Fit Gauge", 1, "MECH-FG", 22000),
+    # Test_ID, item, days, nre_hours, abbrv, lab_rate_per_hr
+    ("T001", "System Boot Functional Check", 1, 8, "Boot-FC", 1875.00),
+    ("T002", "Power Rail Bring-up", 2, 16, "PWR-BU", 1562.50),
+    ("T003", "Thermal Soak Test", 3, 24, "THM-SK", 1666.67),
+    ("T004", "Signal Integrity Sweep", 2, 16, "SI-SW", 2187.50),
+    ("T005", "ORV3 Connector Validation", 2, 16, "ORV3-CV", 1875.00),
+    ("T006", "System on Rail Fit Check", 1, 8, "SoR-Fit", 2500.00),
+    ("T007", "Gold Rail Alignment", 2, 16, "GR-ALN", 1750.00),
+    ("T008", "Gold Rail Continuity", 1, 8, "GR-CON", 2250.00),
+    ("T009", "Functional Stress Run", 3, 24, "FNC-ST", 1875.00),
+    ("T010", "Non-Functional Endurance", 4, 32, "NF-END", 1562.50),
+    ("T011", "Concept Smoke Test", 1, 8, "CPT-SM", 1500.00),
+    ("T012", "BCT Full Sequence", 5, 40, "BCT-FS", 2000.00),
+    ("T013", "NOT Regression Pack", 3, 24, "NOT-RG", 2291.67),
+    ("T014", "EMI / EMC Scan", 2, 16, "EMI-SC", 2625.00),
+    ("T015", "Acoustic Noise Profile", 1, 8, "ACQ-NP", 2000.00),
+    ("T016", "Idle Power Baseline", 1, 8, "IDL-PW", 1750.00),
+    ("T017", "Peak Load Characterization", 2, 16, "PK-LD", 2000.00),
+    ("T018", "Failover / Recovery", 2, 16, "FO-RC", 2250.00),
+    ("T019", "Firmware Flash Verify", 1, 8, "FW-FV", 1250.00),
+    ("T020", "Mechanical Fit Gauge", 1, 8, "MECH-FG", 2750.00),
 ]
 
 # Location lookup for NRE (separate external CSV)
@@ -116,7 +119,14 @@ def write_account_data(account: str) -> dict[str, Path]:
 
     plan = pd.DataFrame(
         TEST_PLAN_ROWS,
-        columns=["Test_ID", "Testplan_Item", "Duration_Days", "Abbrv_Name", "Lab_Fee"],
+        columns=[
+            "Test_ID",
+            "Testplan_Item",
+            "Duration_Days",
+            "Duration_for_NRE",
+            "Abbrv_Name",
+            "Lab_Rate",
+        ],
     )
     path = base / "test_plan_info.csv"
     plan.to_csv(path, index=False)
@@ -204,6 +214,8 @@ def write_nre_template() -> Path:
         "Test_ID",
         "Test_Item",
         "Location",
+        "Duration_for_NRE",
+        "Lab_Rate",
         "Lab_Fee",
         "Qty",
         "Total_Fee",

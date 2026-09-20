@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from copy import copy
 from io import BytesIO
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 from openpyxl import load_workbook
@@ -25,23 +25,28 @@ def compute_multiplier(
     return m
 
 
+def lab_fee_for_item(meta: dict[str, Any]) -> float:
+    """NRE lab fee = Duration_for_NRE (hours) × Lab_Rate (per hour)."""
+    hours = float(meta.get("Duration_for_NRE", 0) or 0)
+    rate = float(meta.get("Lab_Rate", 0) or 0)
+    return round(hours * rate, 2)
+
+
 def build_nre_table(
-    test_ids: list[str],
-    phases: list[str],
-    phase_functionality: dict[str, str],
-    gold_rail: str,
-    ufit_sor: str,
-    qty_per_item: int = 1,
+    phase_configs: list[dict[str, Any]],
     *,
     account: str,
     test_plan_df: pd.DataFrame | None = None,
     location_df: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """
-    Build NRE rows:
-      Test_ID | Test_Item | Location | Lab_Fee | Qty | Total_Fee |
-      Phase | Functionality | Gold_Rail_Selection | Ufit_for_SoR | Final_Fee
-    One row per (test_id × phase).
+    Build NRE rows from per-phase configs.
+
+    Each config:
+      phase, functionality, gold_rail, ufit_sor, test_ids
+
+    Lab_Fee = Duration_for_NRE × Lab_Rate (hours × hourly rate).
+    Final_Fee = Lab_Fee (same base charge; phase / options are recorded as columns only).
     """
     plan = test_plan_df if test_plan_df is not None else load_test_plan_info(account)
     loc_df = location_df if location_df is not None else load_location_info(account)
@@ -49,29 +54,34 @@ def build_nre_table(
     loc = loc_df.set_index("Test_ID")["Location"].to_dict()
     rows: list[dict] = []
 
-    for phase in phases:
-        functionality = phase_functionality.get(phase, "Functional")
-        mult = compute_multiplier(phase, functionality, gold_rail, ufit_sor)
+    for cfg in phase_configs:
+        phase = str(cfg.get("phase", ""))
+        functionality = str(cfg.get("functionality", "Functional"))
+        gold_rail = str(cfg.get("gold_rail", "No"))
+        ufit_sor = str(cfg.get("ufit_sor", "No"))
+        test_ids = list(cfg.get("test_ids") or [])
         for tid in test_ids:
             meta = info.get(str(tid))
             if not meta:
                 continue
-            lab_fee = float(meta["Lab_Fee"])
-            total = lab_fee * qty_per_item
-            final_fee = round(total * mult, 2)
+            hours = float(meta["Duration_for_NRE"])
+            rate = float(meta["Lab_Rate"])
+            lab_fee = lab_fee_for_item(meta)
             rows.append(
                 {
                     "Test_ID": meta["Test_ID"],
                     "Test_Item": meta["Testplan_Item"],
                     "Location": loc.get(meta["Test_ID"], ""),
+                    "Duration_for_NRE": hours,
+                    "Lab_Rate": rate,
                     "Lab_Fee": lab_fee,
-                    "Qty": qty_per_item,
-                    "Total_Fee": total,
+                    "Qty": 1,
+                    "Total_Fee": lab_fee,
                     "Phase": phase,
                     "Functionality": functionality,
                     "Gold_Rail_Selection": gold_rail,
                     "Ufit_for_SoR": ufit_sor,
-                    "Final_Fee": final_fee,
+                    "Final_Fee": lab_fee,
                 }
             )
     return pd.DataFrame(rows)
@@ -112,6 +122,8 @@ def export_nre_xlsx(
                     record.get("Test_ID"),
                     record.get("Test_Item"),
                     record.get("Location"),
+                    record.get("Duration_for_NRE"),
+                    record.get("Lab_Rate"),
                     record.get("Lab_Fee"),
                     record.get("Qty"),
                     record.get("Total_Fee"),
@@ -124,14 +136,19 @@ def export_nre_xlsx(
             )
         if "Summary" in wb.sheetnames:
             summary = wb["Summary"]
+            phases = meta.get("phases", [])
             mapping = {
                 "Account": meta.get("account", ""),
                 "System_Weight_kg": meta.get("weight_kg", ""),
-                "Selected_Phases": ", ".join(meta.get("phases", [])),
-                "Gold_Rail_Selection": meta.get("gold_rail", ""),
-                "Phase_for_Gold_Rail_Selection": meta.get("gold_rail_phase", ""),
-                "Ufit_for_SoR": meta.get("ufit_sor", ""),
-                "Grand_Total_Fee": float(nre_df["Final_Fee"].sum()) if not nre_df.empty else 0,
+                "Selected_Phases": ", ".join(phases),
+                "Gold_Rail_Selection": meta.get("gold_rail", "per phase"),
+                "Phase_for_Gold_Rail_Selection": meta.get(
+                    "gold_rail_phase", "per phase"
+                ),
+                "Ufit_for_SoR": meta.get("ufit_sor", "per phase"),
+                "Grand_Total_Fee": float(nre_df["Final_Fee"].sum())
+                if not nre_df.empty
+                else 0,
             }
             for row in summary.iter_rows(min_row=1, max_row=summary.max_row, max_col=2):
                 key = row[0].value
