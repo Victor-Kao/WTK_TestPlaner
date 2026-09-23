@@ -1,24 +1,21 @@
 Test_ID,Testplan_Item,Duration_Days,Duration_for_NRE,Abbrv_Name,Lab_Rate
-T001,System Boot Functional Check,1,8,Boot-FC,1875.0
-T002,Power Rail Bring-up,2,16,PWR-BU,1562.5
-T003,Thermal Soak Test,3,24,THM-SK,1666.67
-T004,Signal Integrity Sweep,2,16,SI-SW,2187.5
-T005,ORV3 Connector Validation,2,16,ORV3-CV,1875.0
-T006,System on Rail Fit Check,1,8,SoR-Fit,2500.0
-T007,Gold Rail Alignment,2,16,GR-ALN,1750.0
-T008,Gold Rail Continuity,1,8,GR-CON,2250.0
-T009,Functional Stress Run,3,24,FNC-ST,1875.0
-T010,Non-Functional Endurance,4,32,NF-END,1562.5
-T011,Concept Smoke Test,1,8,CPT-SM,1500.0
-T012,BCT Full Sequence,5,40,BCT-FS,2000.0
-T013,NOT Regression Pack,3,24,NOT-RG,2291.67
-T014,EMI / EMC Scan,2,16,EMI-SC,2625.0
-T015,Acoustic Noise Profile,1,8,ACQ-NP,2000.0
-T016,Idle Power Baseline,1,8,IDL-PW,1750.0
-T017,Peak Load Characterization,2,16,PK-LD,2000.0
-T018,Failover / Recovery,2,16,FO-RC,2250.0
-T019,Firmware Flash Verify,1,8,FW-FV,1250.0
-T020,Mechanical Fit Gauge,1,8,MECH-FG,2750.0
-UFIT,UFIT,1,8,U-FIT,4.12
-OM,OM,6,48,OM,0.69
-DnP,DnP,7,56,DnP,3.57
+SV0106 ,NonOp Half Sine Shock Test Procedure,1,5,Non-Op HS,140
+SV0103,NonOp Long Duration Half Sine Shock Test Procedure,1,5,Non-Op LDHS,140
+SV0126,Non-Operational Half Sine Shock Test Procedure for Rack Systems,1,4,Non-Op ORV3 HS,140
+SV0125,Non Op Random Vib Test Procedure for ORv3 Rack Systems,2,5,Non-Op ORV3 Random Vibration,125
+SV0102 ,NonOp Random Vibration Test Procedure,2,6,Non-Op Random Vibration,125
+SV0117,Non-Operational Half Sine Shock Test Procedure for Rack Systems,1,5,Non-Op SoR HS,175
+SV0118,Non-Operational Random Vibration Test Procedure for Rack Systems,2,4,Non-Op SoR Random Vibration,125
+SV0107,Operational Half Sine Shock Test Procedure,2,4,Op HS,113
+SV0127,Operational Random Vib Test Procedure for ORv3 Rack Systems,2,4,Op ORV3  Random Vibration,140
+SV0128,Operational Half Sine Shock Test Procedure for Rack Systems,2,5,Op ORV3 HS,113
+SV0105,Operational Random Vibration Test Procedure,2,5,Op Random Vibration,140
+SV0114,Rack and Stack Vibration Test,1,,RnS - L11,800
+ENG0013791_CHECK,Pre/Post Process and Function Check,1,0,Pre-Process,0
+ENG0013791_UFIT,U-envelop measurement ,1,1,U-fit / Leading Edge ,33
+ENG0013791_GRS,Gold Rail selection,2,3,Gold Rail selection,33
+REL0164_OM,Optical Measurement,5,1,OM,33
+REL0164_DNP,Dye and Pry Procedure,7,1,DnP,200
+AUX_1,Wooden Fixture,8,,Wooden Fixture,3000
+AUX_2,DummyWeight,8,,DummyWeight,1500
+AUX_3,Rack Building / Modification ,30,,Rack Building / Modification ,10000

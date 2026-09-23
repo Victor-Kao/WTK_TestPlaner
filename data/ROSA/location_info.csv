@@ -1,21 +1,21 @@
 Test_ID,Location
-T001,Lab-A / Hsinchu
-T002,Lab-A / Hsinchu
-T003,Lab-B / Taipei
-T004,Lab-B / Taipei
-T005,Lab-C / Taoyuan
-T006,Lab-C / Taoyuan
-T007,Lab-A / Hsinchu
-T008,Lab-A / Hsinchu
-T009,Lab-B / Taipei
-T010,Lab-B / Taipei
-T011,Lab-A / Hsinchu
-T012,Lab-C / Taoyuan
-T013,Lab-C / Taoyuan
-T014,Lab-EMC / Linkou
-T015,Lab-ACO / Linkou
-T016,Lab-A / Hsinchu
-T017,Lab-A / Hsinchu
-T018,Lab-B / Taipei
-T019,Lab-A / Hsinchu
-T020,Lab-MECH / Taoyuan
+SV0106 ,3rd-Party(hours)
+SV0103,3rd-Party(hours)
+SV0126,3rd-Party(hours)
+SV0125,3rd-Party(hours)
+SV0102 ,3rd-Party(hours)
+SV0117,3rd-Party(hours)
+SV0118,3rd-Party(hours)
+SV0107,3rd-Party(hours)
+SV0127,3rd-Party(hours)
+SV0128,3rd-Party(hours)
+SV0105,3rd-Party(hours)
+SV0114,3rd-Party(hours)
+ENG0013791_CHECK,In House(hours)
+ENG0013791_UFIT,In House(hours)
+ENG0013791_GRS,In House(hours)
+REL0164_OM,3rd-Party(hours)
+REL0164_DNP,3rd-Party(hours)
+AUX_1,Vendor(set)
+AUX_2,Vendor(set)
+AUX_3,Vendor(set)
