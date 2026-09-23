@@ -28,8 +28,10 @@ from modules.data_loader import (
     load_convert_table,
     load_location_info,
     load_test_plan_info,
+    load_test_plan_info_detail,
     lookup_convert_id,
     load_case_sequence,
+    test_detail_by_id,
     test_info_by_id,
 )
 from modules.nre import (
@@ -192,10 +194,47 @@ def _ensure_working_catalog(account: str) -> None:
         _load_working_catalog_from_disk(account)
 
 
-def _select_options(info: dict) -> list[str]:
-    """Dropdown choices for calendar cells (Excel-like)."""
+def _excluded_test_ids_for_plan(
+    standard: str,
+    functionality: str,
+    gold_rail: str,
+) -> set[str]:
+    """Test_IDs hidden from the timeline cell selector for the current plan options."""
+    excluded: set[str] = set()
+    std = str(standard or "")
+    if std.startswith("EIA"):
+        excluded.update({"SV0126", "SV0125", "SV0127", "SV0128"})
+    if "OCP" in std:
+        excluded.update({"SV0117", "SV0118", "SV0105", "SV0107"})
+    if functionality == "Non-functional":
+        excluded.update(
+            {
+                "SV0107",
+                "SV0127",
+                "SV0128",
+                "SV0105",
+                "REL0164_OM",
+                "REL0164_DNP",
+            }
+        )
+    if gold_rail == "No":
+        excluded.add("ENG0013791_GRS")
+    return excluded
+
+
+def _select_options(
+    info: dict,
+    *,
+    standard: str = "",
+    functionality: str = "",
+    gold_rail: str = "",
+) -> list[str]:
+    """Dropdown choices for calendar cells (Excel-like), filtered by plan options."""
+    excluded = _excluded_test_ids_for_plan(standard, functionality, gold_rail)
     opts = ["", CELL_AHEAD_OPT, CELL_POSTPONE_OPT]
     for tid, meta in info.items():
+        if str(tid).strip() in excluded:
+            continue
         opts.append(f"{meta['Abbrv_Name']} ({tid})")
     return opts
 
@@ -367,6 +406,7 @@ else:
                 ufit_sor = st.radio(
                     "U-fit for L10.5 SoR / ORv3 mini Rack",
                     YES_NO,
+                    index=1,
                     horizontal=True,
                     key="tp_ufit",
                 )
@@ -468,12 +508,19 @@ else:
                     "blank days before the start stay blank. "
                     "Weekend / Holiday columns are light red. "
                     "Edit the first **Row** cell to rename a system (e.g. DUT-A). "
+                    "The **Profile** row under each system shows weight-band notes "
+                    "(truncated; **double-click** a cell to read the full text). "
                     "Row buttons Ahead/Postpone shift the **whole** system line. "
                     "In a cell dropdown, **Ahead (−1) from here** / **Postpone (+1) from here** "
                     "shift only items from that date onward (blocked with a warning if Ahead would overlap)."
                 )
 
-                options = _select_options(info_map)
+                options = _select_options(
+                    info_map,
+                    standard=standard,
+                    functionality=functionality,
+                    gold_rail=gold_rail,
+                )
                 if st.session_state.editor_error:
                     st.error(st.session_state.editor_error)
                 if st.session_state.get("refresh_msg"):
@@ -510,9 +557,12 @@ else:
                             )
                         st.rerun()
 
+                detail_map = test_detail_by_id(load_test_plan_info_detail(account))
                 event = render_synced_calendar(
                     timeline,
                     options,
+                    weight_kg=float(weight_kg),
+                    detail_by_id=detail_map,
                     key="synced_cal",
                 )
 
@@ -619,10 +669,18 @@ else:
                 st.divider()
                 st.subheader("3. Update → Export Table")
                 if st.button("Update", type="primary"):
-                    st.session_state.export_df = timeline_to_export_df(
-                        st.session_state.timeline
+                    detail_map = test_detail_by_id(
+                        load_test_plan_info_detail(account)
                     )
-                    st.success("Timeline converted to export table.")
+                    st.session_state.export_df = timeline_to_export_df(
+                        st.session_state.timeline,
+                        weight_kg=float(weight_kg),
+                        detail_by_id=detail_map,
+                    )
+                    st.success(
+                        "Timeline converted to export table "
+                        "(item on line 1, profile note on line 2 in the same cell)."
+                    )
 
                 if st.session_state.export_df is not None:
                     export_styled = style_timeline_display(
@@ -675,6 +733,7 @@ else:
                     ufit_sor = st.radio(
                         "U-fit for L10.5 SoR / ORv3 mini Rack",
                         YES_NO,
+                        index=1,
                         horizontal=True,
                         key=f"nre_ufit_{phase}",
                     )

@@ -126,13 +126,14 @@ Each account has its own folder (`data/ROSA/`, `data/NAOMI/`):
 | File | Purpose |
 |------|---------|
 | `test_plan_info.csv` | Test_ID, Testplan_Item, Duration_Days (timeline days), Duration_for_NRE (billable hours), Abbrv_Name, Lab_Rate (per hour) |
+| `test_plan_info_detail.csv` | Per-Test_ID profile text by weight band (`PROFILE_S40LBS` / `S75` / `S200` / `L200`) for export detail rows |
 | `location_info.csv` | Test_ID → Location (for NRE) |
 | `convert_table.csv` | 32 case combos → Convert_ID + Sheet_Name (Standard × … × systems 1–2) |
 | `test_item_sequence_all_cases.xlsx` | 32 sheets (`Case_01` … `Case_32`); one token per cell |
 
 ### Convert dimensions (2×2×2×2×2 = 32)
 
-- Standard: **EIA - 19"** / **OCP - 21"**
+- Standard: **EIA - 19"** / **OCP - 21" / MGX rack**
 - Functionality: Functional / Non-functional
 - Gold Rail Selection: Yes / No
 - U-fit for L10.5 SoR / ORv3 mini Rack: Yes / No

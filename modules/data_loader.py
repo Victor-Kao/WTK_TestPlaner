@@ -51,6 +51,71 @@ def load_test_plan_info(account: str) -> pd.DataFrame:
     return df
 
 
+PROFILE_COLUMNS = (
+    "PROFILE_S40LBS",
+    "PROFILE_S75LBS",
+    "PROFILE_S200LBS",
+    "PROFILE_L200LBS",
+)
+
+
+def profile_column_for_weight(weight_kg: float) -> str:
+    """
+    Pick detail profile column from system weight (kg):
+      < 18      → PROFILE_S40LBS
+      [18, 34)  → PROFILE_S75LBS
+      [34, 90)  → PROFILE_S200LBS
+      ≥ 90      → PROFILE_L200LBS
+    """
+    w = float(weight_kg)
+    if w < 18:
+        return "PROFILE_S40LBS"
+    if w < 34:
+        return "PROFILE_S75LBS"
+    if w < 90:
+        return "PROFILE_S200LBS"
+    return "PROFILE_L200LBS"
+
+
+@st.cache_data(show_spinner=False)
+def load_test_plan_info_detail(account: str) -> pd.DataFrame:
+    """Load weight-profile detail text per Test_ID (optional file)."""
+    path = account_paths(account)["test_plan_info_detail"]
+    if not path.exists():
+        return pd.DataFrame(columns=["Test_ID", *PROFILE_COLUMNS])
+    df = pd.read_csv(path)
+    # Drop trailing unnamed empty columns from Excel exports
+    df = df.loc[:, ~df.columns.astype(str).str.match(r"^Unnamed")]
+    if "Test_ID" not in df.columns:
+        raise ValueError(f"{path.name} missing Test_ID column")
+    df["Test_ID"] = df["Test_ID"].astype(str).str.strip()
+    for col in PROFILE_COLUMNS:
+        if col not in df.columns:
+            df[col] = ""
+        else:
+            df[col] = df[col].fillna("").astype(str).str.strip()
+            df.loc[df[col].str.lower().isin(("nan", "none")), col] = ""
+    return df
+
+
+def test_detail_by_id(
+    df: pd.DataFrame | None = None,
+    *,
+    account: str | None = None,
+) -> dict[str, dict[str, str]]:
+    if df is None:
+        if not account:
+            raise ValueError("Provide df or account for test_detail_by_id")
+        df = load_test_plan_info_detail(account)
+    out: dict[str, dict[str, str]] = {}
+    for _, row in df.iterrows():
+        tid = str(row["Test_ID"]).strip()
+        if not tid:
+            continue
+        out[tid] = {col: str(row.get(col, "") or "").strip() for col in PROFILE_COLUMNS}
+    return out
+
+
 @st.cache_data(show_spinner=False)
 def load_location_info(account: str) -> pd.DataFrame:
     path = account_paths(account)["location_info"]
@@ -273,17 +338,27 @@ def load_taiwan_holidays(years: tuple[int, ...]) -> dict[str, str]:
     Online calendar is preferred and cached under data/holidays/{year}.json so
     new years appear automatically when the upstream publishes them — no hard-coded
     year list in code.
+
+    If a year is not on the CDN yet (gov usually publishes ~June for the next year),
+    weekends still count as non-working; named holidays for that year are skipped.
     """
+    from datetime import date as _date
+
     holidays: dict[str, str] = {}
+    # Upstream typically has current year + next; further-out years often 404.
+    warn_through = _date.today().year + 1
     for year in years:
+        y = int(year)
         try:
-            records = _fetch_year_calendar(int(year))
+            records = _fetch_year_calendar(y)
         except Exception:
-            st.warning(
-                f"Taiwan holidays for {year} unavailable (CDN/proxy). "
-                "Weekends are still treated as non-working; "
-                f"optional offline cache: data/holidays/{year}.json"
-            )
+            if y <= warn_through:
+                st.warning(
+                    f"Taiwan holidays for {y} unavailable (CDN/proxy). "
+                    "Weekends are still treated as non-working; "
+                    f"optional offline cache: data/holidays/{y}.json"
+                )
+            # else: unpublished future year — silent; weekends only
             continue
         for rec in records:
             if not rec.get("isHoliday"):

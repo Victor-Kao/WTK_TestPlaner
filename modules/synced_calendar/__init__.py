@@ -9,6 +9,7 @@ import streamlit.components.v1 as components
 
 from modules.config import CELL_AHEAD_OPT, CELL_POSTPONE_OPT
 
+from modules.data_loader import profile_column_for_weight
 from modules.timeline import sorted_system_keys
 
 _FRONTEND = Path(__file__).parent / "frontend"
@@ -19,10 +20,15 @@ def render_synced_calendar(
     timeline: dict[str, Any],
     options: list[str],
     *,
+    weight_kg: float | None = None,
+    detail_by_id: dict[str, dict[str, str]] | None = None,
     key: str | None = None,
 ) -> dict | None:
     """
     Render split tables (Calendar marks + one table per System).
+
+    Under each system schedule row, a read-only PROFILE note row is shown
+    (from test_plan_info_detail.csv by system weight). Empty profile → blank.
 
     Returns event dict when user changes a cell:
       - {kind: "system", system, date, value, nonce}
@@ -45,23 +51,36 @@ def render_synced_calendar(
     blocked = list(timeline.get("blocked", []))
     grid: dict = timeline.get("grid", {})
 
+    profile_col = None
+    if weight_kg is not None and detail_by_id:
+        profile_col = profile_column_for_weight(float(weight_kg))
+
     weekdays = [date.fromisoformat(d).strftime("%a") for d in dates]
     marks = [" | ".join(markers.get(d, [])) for d in dates]
 
     systems = []
     for name in sorted_system_keys(timeline):
         cells = {}
+        notes = {}
         for d in dates:
             cell = grid[name].get(d)
             if not cell:
                 cells[d] = ""
+                notes[d] = ""
             elif cell.get("is_empty"):
                 cells[d] = "Empty"
+                notes[d] = ""
             else:
                 tid = cell.get("test_id", "")
                 abbrv = cell.get("abbrv") or tid
                 cells[d] = f"{abbrv} ({tid})"
-        systems.append({"name": name, "cells": cells})
+                note = ""
+                if profile_col and detail_by_id:
+                    meta = detail_by_id.get(str(tid).strip())
+                    if meta:
+                        note = meta.get(profile_col, "") or ""
+                notes[d] = note
+        systems.append({"name": name, "cells": cells, "notes": notes})
 
     return _component(
         dates=dates,

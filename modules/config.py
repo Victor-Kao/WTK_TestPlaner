@@ -13,7 +13,7 @@ YES_NO = ["Yes", "No"]
 SYSTEM_NUMBERS = list(range(1, 11))  # 1…10 systems on the timeline
 # Convert table + Case sequence sheets only define templates through this many systems
 SEQUENCE_TEMPLATE_MAX_SYSTEMS = 2
-STANDARDS = ['EIA - 19"', 'OCP - 21"']
+STANDARDS = ['EIA - 19"', 'OCP - 21" / MGX rack']
 
 EMPTY_TOKEN = "EMPTY"
 EMPTY_LABEL = "Empty"
@@ -51,6 +51,7 @@ def account_paths(account: str) -> dict[str, Path]:
     return {
         "dir": base,
         "test_plan_info": base / "test_plan_info.csv",
+        "test_plan_info_detail": base / "test_plan_info_detail.csv",
         "location_info": base / "location_info.csv",
         "convert_table": base / "convert_table.csv",
         "sequence_xlsx": base / "test_item_sequence_all_cases.xlsx",

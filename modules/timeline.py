@@ -7,9 +7,15 @@ from typing import Any
 import pandas as pd
 
 from modules.config import EMPTY_LABEL, EMPTY_TOKEN
-from modules.data_loader import load_taiwan_holidays, tokens_from_sequence_row, test_info_by_id
+from modules.data_loader import (
+    load_taiwan_holidays,
+    profile_column_for_weight,
+    tokens_from_sequence_row,
+    test_info_by_id,
+)
 
 BLOCKED_FILL = "#ffcdd2"  # light red for weekend / holiday columns
+EVENT_MILESTONE_FILL = "#fff9c4"  # light yellow for System ETA / Critical Feedback
 
 
 def format_date_display(d: date | str) -> str:
@@ -30,9 +36,16 @@ def daterange(start: date, end: date) -> list[date]:
 
 
 def _holiday_map_for_span(start: date, end: date) -> dict[str, str]:
-    years = tuple(sorted({start.year, end.year, *(d.year for d in (start, end))}))
-    # pad a bit for business-day look-ahead
-    years = tuple(sorted(set(years) | {start.year - 1, end.year + 1}))
+    """
+    Load holiday years that actually cover [start, end], plus a modest day pad
+    for business-day look-ahead — not a full ±1 calendar year (that pulled 2028
+    when planning Dec 2026 → early 2027, and 2028 is often unpublished).
+    """
+    if end < start:
+        start, end = end, start
+    pad_start = start - timedelta(days=14)
+    pad_end = end + timedelta(days=90)
+    years = tuple(range(pad_start.year, pad_end.year + 1))
     return load_taiwan_holidays(years)
 
 
@@ -994,16 +1007,26 @@ def timeline_editor_df(timeline: dict[str, Any]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def timeline_to_export_df(timeline: dict[str, Any]) -> pd.DataFrame:
+def timeline_to_export_df(
+    timeline: dict[str, Any],
+    *,
+    weight_kg: float | None = None,
+    detail_by_id: dict[str, dict[str, str]] | None = None,
+) -> pd.DataFrame:
     """
     Export layout:
       Row 0: Date
       Row 1: Event (Holiday / Weekend / System ETA / Critical Feedback)
-      Row 2+: System 1..N
+      Row 2+: one row per system — same cell, two lines when profile exists:
+        line 1 = Abbrv, line 2 = PROFILE note.
     """
     dates = timeline["dates"]
     markers = timeline["markers"]
     grid = timeline["grid"]
+
+    profile_col = None
+    if weight_kg is not None and detail_by_id is not None:
+        profile_col = profile_column_for_weight(float(weight_kg))
 
     rows: list[dict[str, str]] = []
     date_row = {"Row": "Date"}
@@ -1023,10 +1046,19 @@ def timeline_to_export_df(timeline: dict[str, Any]) -> pd.DataFrame:
             elif cell.get("is_empty"):
                 r[d] = EMPTY_TOKEN
             else:
-                # Fill every day of a multi-day item (not only the start day)
-                tid = cell.get("test_id", "")
-                abbrv = cell.get("abbrv") or tid
-                r[d] = f"{abbrv} ({tid})" if tid else abbrv
+                tid = str(cell.get("test_id", "") or "").strip()
+                abbrv = (cell.get("abbrv") or tid).strip()
+                detail = ""
+                if profile_col and detail_by_id and tid:
+                    meta = detail_by_id.get(tid)
+                    if meta:
+                        detail = (meta.get(profile_col, "") or "").strip()
+                if detail:
+                    r[d] = f"{abbrv}\n{detail}"
+                elif tid:
+                    r[d] = f"{abbrv} ({tid})"
+                else:
+                    r[d] = abbrv
         rows.append(r)
 
     return pd.DataFrame(rows)
@@ -1057,15 +1089,30 @@ def timeline_to_display_df(timeline: dict[str, Any]) -> pd.DataFrame:
 
 
 def style_timeline_display(df: pd.DataFrame, timeline: dict[str, Any]):
-    """Light-red entire Weekend / Holiday columns."""
+    """Light-red Weekend/Holiday columns; light-yellow System ETA / Critical Feedback on Event row."""
     blocked = set(timeline.get("blocked", []))
+    markers = timeline.get("markers", {})
+    milestone_dates = {
+        d
+        for d, tags in markers.items()
+        if "System ETA" in tags or "Critical Feedback" in tags
+    }
 
-    def _col_style(col: pd.Series):
-        if col.name in blocked:
-            return [f"background-color: {BLOCKED_FILL}"] * len(col)
-        return [""] * len(col)
+    def _row_style(row: pd.Series):
+        is_event = str(row.get("Row", "")) == "Event"
+        styles: list[str] = []
+        for col in row.index:
+            if col == "Row":
+                styles.append("")
+            elif col in blocked:
+                styles.append(f"background-color: {BLOCKED_FILL}")
+            elif is_event and col in milestone_dates:
+                styles.append(f"background-color: {EVENT_MILESTONE_FILL}")
+            else:
+                styles.append("")
+        return styles
 
-    return df.style.apply(_col_style, axis=0)
+    return df.style.apply(_row_style, axis=1)
 
 
 def fillable_dates(timeline: dict[str, Any]) -> list[str]:

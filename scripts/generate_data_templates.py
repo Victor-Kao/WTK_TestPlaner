@@ -17,7 +17,7 @@ from openpyxl.styles import Alignment, Font, PatternFill
 ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / "data"
 ACCOUNTS = ["ROSA", "NAOMI"]
-STANDARDS = ['EIA - 19"', 'OCP - 21"']
+STANDARDS = ['EIA - 19"', 'OCP - 21" / MGX rack']
 
 # ---------------------------------------------------------------------------
 # Sample Test Plan Info Table (user can replace / extend)

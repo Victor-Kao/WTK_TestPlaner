@@ -153,6 +153,16 @@
       background: var(--blocked) !important;
     }
     th.blocked { background: #ef9a9a !important; }
+    .event-milestone {
+      background: #fff9c4 !important;
+    }
+    .event-milestone.blocked {
+      background: #fff59d !important;
+    }
+    .event-milestone select.mark-empty-select {
+      background: #fff9c4 !important;
+      border-color: #f0e68c;
+    }
     select.cell-select,
     select.mark-empty-select {
       width: 100%;
@@ -170,6 +180,93 @@
       max-height: var(--row-h);
       overflow: hidden;
     }
+    td.profile-note {
+      font-size: 11px;
+      color: #475569;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      line-height: 1.25;
+      text-align: left !important;
+      vertical-align: middle;
+      height: var(--row-h);
+      max-height: var(--row-h);
+      padding: 4px 6px;
+      background: #f8fafc;
+      cursor: pointer;
+    }
+    td.profile-note:hover {
+      background: #eef2f7;
+    }
+    td.profile-note.blocked {
+      background: var(--blocked) !important;
+    }
+    td.profile-note.blocked:hover {
+      background: #ef9a9a !important;
+    }
+    td.label-col.profile-label {
+      font-weight: 500;
+      font-size: 11px;
+      color: #64748b;
+    }
+    .profile-modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(15, 23, 42, 0.45);
+      z-index: 1000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+    }
+    .profile-modal {
+      background: #fff;
+      border: 1px solid #c5c9d0;
+      border-radius: 8px;
+      max-width: min(520px, 100%);
+      width: 100%;
+      box-shadow: 0 12px 40px rgba(0,0,0,0.18);
+      padding: 14px 16px 12px;
+    }
+    .profile-modal h3 {
+      margin: 0 0 6px;
+      font-size: 14px;
+      color: #1f2937;
+    }
+    .profile-modal .meta {
+      font-size: 12px;
+      color: #64748b;
+      margin-bottom: 10px;
+    }
+    .profile-modal .body {
+      font-size: 13px;
+      color: #1f2937;
+      white-space: pre-wrap;
+      word-break: break-word;
+      line-height: 1.45;
+      max-height: 240px;
+      overflow-y: auto;
+      padding: 10px 12px;
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 6px;
+    }
+    .profile-modal .actions {
+      margin-top: 12px;
+      text-align: right;
+    }
+    .profile-modal button {
+      font-size: 13px;
+      padding: 6px 14px;
+      border-radius: 4px;
+      border: 1px solid #90a4ae;
+      background: #e2e8f0;
+      cursor: pointer;
+      color: #1f2937;
+    }
+    .profile-modal button:hover {
+      background: #cbd5e1;
+    }
   </style>
 </head>
 <body>
@@ -177,10 +274,12 @@
     <p class="hint">
       Scroll any table horizontally — all tables stay aligned.
       Click the first-column name (System 1, …) to rename the row.
+      Double-click a <b>Profile</b> cell to read the full note.
       In Event, choose Empty to lock that day (stays white) and postpone plans later — never earlier.
       Only Weekend / Holiday columns are light red.
     </p>
     <div id="root"></div>
+    <div id="profile-modal-host"></div>
   </div>
   <script>
     function sendMessage(type, data) {
@@ -251,13 +350,17 @@
     let lastStructureKey = null;
     let scrollX = 0;
 
-    function structureKey(dates, systems, blocked, emptyMarks, calendarBlocked) {
+    function structureKey(dates, systems, blocked, emptyMarks, calendarBlocked, options) {
       return JSON.stringify({
         dates,
         blocked,
         emptyMarks,
         calendarBlocked,
-        systems: (systems || []).map((s) => s.name),
+        options,
+        systems: (systems || []).map((s) => ({
+          name: s.name,
+          notes: s.notes || {},
+        })),
       });
     }
 
@@ -293,12 +396,21 @@
       });
       (systems || []).forEach((sys) => {
         const cells = sys.cells || {};
+        const notes = sys.notes || {};
         Object.keys(cells).forEach((d) => {
           const sel = root.querySelector(
             `select.cell-select[data-system="${CSS.escape(sys.name)}"][data-date="${CSS.escape(d)}"]`
           );
           if (sel && sel.value !== cells[d]) sel.value = cells[d];
           if (sel) sel.dataset.prevValue = sel.value;
+          const noteEl = root.querySelector(
+            `.profile-note[data-system="${CSS.escape(sys.name)}"][data-date="${CSS.escape(d)}"]`
+          );
+          if (noteEl) {
+            const text = notes[d] || "";
+            noteEl.textContent = text;
+            noteEl.title = text;
+          }
         });
       });
     }
@@ -387,6 +499,64 @@
         });
         inp.addEventListener("blur", commit);
       });
+      root.querySelectorAll("td.profile-note").forEach((td) => {
+        if (td.dataset.bound === "1") return;
+        td.dataset.bound = "1";
+        td.addEventListener("dblclick", (e) => {
+          e.preventDefault();
+          const text = (td.getAttribute("title") || td.textContent || "").trim();
+          if (!text) return;
+          const sys = td.getAttribute("data-system") || "";
+          const d = td.getAttribute("data-date") || "";
+          showProfileModal(sys, d, text);
+        });
+      });
+    }
+
+    function closeProfileModal() {
+      const host = document.getElementById("profile-modal-host");
+      if (host) host.innerHTML = "";
+    }
+
+    function showProfileModal(system, dateIso, text) {
+      const host = document.getElementById("profile-modal-host");
+      if (!host) return;
+      const shown = formatDate(dateIso);
+      host.innerHTML = `
+        <div class="profile-modal-backdrop" role="dialog" aria-modal="true">
+          <div class="profile-modal">
+            <h3>Profile detail</h3>
+            <div class="meta">${esc(system)} · ${esc(shown)}</div>
+            <div class="body">${esc(text)}</div>
+            <div class="actions"><button type="button" class="profile-modal-close">Close</button></div>
+          </div>
+        </div>`;
+      const backdrop = host.querySelector(".profile-modal-backdrop");
+      const closeBtn = host.querySelector(".profile-modal-close");
+      const onKey = (ev) => {
+        if (ev.key === "Escape") {
+          window.removeEventListener("keydown", onKey);
+          closeProfileModal();
+        }
+      };
+      window.addEventListener("keydown", onKey);
+      if (closeBtn) closeBtn.addEventListener("click", () => {
+        window.removeEventListener("keydown", onKey);
+        closeProfileModal();
+      });
+      if (backdrop) {
+        backdrop.addEventListener("click", (ev) => {
+          if (ev.target === backdrop) {
+            window.removeEventListener("keydown", onKey);
+            closeProfileModal();
+          }
+        });
+      }
+    }
+
+    function isMilestoneMark(markText) {
+      const t = String(markText || "");
+      return t.includes("System ETA") || t.includes("Critical Feedback");
     }
 
     function buildHtml(dates, weekdays, marks, calBlockedSet, emptySet, systems, options) {
@@ -408,13 +578,15 @@
       // Event row includes Empty option (merged)
       html += `<tr><td class="label-col">Event</td>`;
       dates.forEach((d, i) => {
+        const milestone = isMilestoneMark(marks[i]);
+        const milCls = milestone ? " event-milestone" : "";
         if (calBlockedSet.has(d)) {
-          html += `<td class="date-col blocked"><div class="marked-cell">${esc(marks[i] || "")}</div></td>`;
+          html += `<td class="date-col blocked${milCls}"><div class="marked-cell">${esc(marks[i] || "")}</div></td>`;
         } else {
           const isEmpty = emptySet.has(d);
           const auto = cleanAutoMark(marks[i]);
           const label0 = auto || "—";
-          html += `<td class="date-col"><select class="mark-empty-select" data-date="${esc(d)}">`;
+          html += `<td class="date-col${milCls}"><select class="mark-empty-select" data-date="${esc(d)}">`;
           html += `<option value=""${isEmpty ? "" : " selected"}>${esc(label0)}</option>`;
           html += `<option value="Empty"${isEmpty ? " selected" : ""}>Empty</option>`;
           html += `</select></td>`;
@@ -452,6 +624,15 @@
             html += `</select></td>`;
           }
         });
+        html += `</tr>`;
+        // PROFILE note row under the schedule selectors
+        html += `<tr><td class="label-col profile-label">Profile</td>`;
+        dates.forEach((d) => {
+          const isRed = redSet.has(d);
+          const cls = isRed ? "date-col profile-note blocked" : "date-col profile-note";
+          const note = (sys.notes && sys.notes[d]) || "";
+          html += `<td class="${cls}" data-system="${esc(sys.name)}" data-date="${esc(d)}" title="${esc(note)}">${esc(note)}</td>`;
+        });
         html += `</tr></tbody></table></div></div>`;
       });
       return html;
@@ -471,7 +652,7 @@
       const calBlockedSet = new Set(calendarBlocked);
       const emptySet = new Set(emptyMarks);
       const root = document.getElementById("root");
-      const sk = structureKey(dates, systems, blocked, emptyMarks, calendarBlocked);
+      const sk = structureKey(dates, systems, blocked, emptyMarks, calendarBlocked, options);
 
       if (sk === lastStructureKey && root.dataset.ready === "1") {
         saveScroll(root);
@@ -491,8 +672,9 @@
       restoreScroll(root);
 
       const nSys = systems.length;
+      // marks block + per system: title, header, schedule row, profile row
       const height =
-        56 + 28 + (38 * 3 + 8) + nSys * (28 + 38 * 2 + 8) + Math.max(0, nSys) * 28 + 24;
+        56 + 28 + (38 * 3 + 8) + nSys * (28 + 38 * 3 + 16) + Math.max(0, nSys) * 28 + 40;
       setFrameHeight(height);
     }
   </script>
