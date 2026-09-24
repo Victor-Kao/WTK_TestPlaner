@@ -129,14 +129,14 @@ Each account has its own folder (`data/ROSA/`, `data/NAOMI/`):
 | `test_plan_info_detail.csv` | Per-Test_ID profile text by weight band (`PROFILE_S40LBS` / `S75` / `S200` / `L200`) for export detail rows |
 | `location_info.csv` | Test_ID → Location (for NRE) |
 | `convert_table.csv` | 32 case combos → Convert_ID + Sheet_Name (Standard × … × systems 1–2) |
-| `test_item_sequence_all_cases.xlsx` | 32 sheets (`Case_01` … `Case_32`); one token per cell |
+| `test_item_sequence_all_cases.xlsx` | 48 sheets (`Case_01` … `Case_48`); one token per cell; systems **1–3** |
 
 ### Convert dimensions (2×2×2×2×2 = 32)
 
 - Standard: **EIA - 19"** / **OCP - 21" / MGX rack**
 - Functionality: Functional / Non-functional
 - Gold Rail Selection: Yes / No
-- U-fit for L10.5 SoR / ORv3 mini Rack: Yes / No
+- Only ORv3 / MGX Mini Rack w.o L11 Rack: Yes / No
 - System Number: **1 / 2** (templates only)
 
 The timeline UI allows **1–10** systems. From **3** systems up, fill the timeline manually.
@@ -158,11 +158,11 @@ Example above → blank 1 day, then T003, T004, T006, blank 5 days, then T010.
 
 ## Flow
 
-1. On the main page, set **Account**, **System weight**, and **Standard**, then click **Start Arranging Test Plan** (no app sidebar — reserved for a parent tool).
-2. Set System ETA, critical feedback, # systems (left); functional type, U-fit, gold rail (right).
+1. On the main page, set **Account**, **System weight**, **Standard**, **Project name**, and **Phase** (C0–C6), then click **Start Arranging Test Plan** (no app sidebar — reserved for a parent tool).
+2. Set System ETA, critical feedback, # systems (left); functional type, Only ORv3 / MGX Mini Rack w.o L11 Rack, gold rail (right).
 3. **Generate Test Plan** → timeline with weekdays, weekends, Taiwan holidays, ETA, feedback.
 4. Select a cell → assign a test item (or use Event row for Empty). Same-row no overlap; multi-day duration auto-spans.
 5. **Update** → export table (Date / Event / System rows) → download CSV.
-6. **NRE Estimation** tab → pick phases → each phase section sets functionality / gold rail / U-fit / test items → generate & download.
+6. **NRE Estimation** tab → pick phases → each phase section sets functionality / gold rail / Only ORv3–MGX flag / test items → generate & download.
 7. **Data preview** at the bottom of the page is collapsed by default.
 8. Headcount tab is TBD.

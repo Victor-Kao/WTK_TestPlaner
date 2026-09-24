@@ -4,7 +4,7 @@ Writes per-account folders under data/<ACCOUNT>/:
   - test_plan_info.csv
   - location_info.csv
   - convert_table.csv   (32 case combos; Standard × … × systems 1–2)
-  - test_item_sequence_all_cases.xlsx  (32 sheets: Case_01 … Case_32)
+  - test_item_sequence_all_cases.xlsx  (48 sheets: Case_01 … Case_48)
 """
 from __future__ import annotations
 
@@ -13,6 +13,8 @@ from pathlib import Path
 import pandas as pd
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
+
+from modules.config import ORV3_MGX_WO_L11_COL
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / "data"
@@ -76,9 +78,9 @@ LOCATION_ROWS = [
 
 def all_case_combinations() -> list[dict]:
     """
-    2 * 2 * 2 * 2 * 2 = 32 combinations (Convert_ID 1..32).
-    Dimensions: Standard × Functionality × Gold_Rail × Ufit_SoR × System_Number(1–2).
-    Systems 3–10: no template — user fills the timeline manually.
+    2 * 2 * 2 * 2 * 3 = 48 combinations (Convert_ID 1..48).
+    Dimensions: Standard × Functionality × Gold_Rail × Only_ORv3_MGX_wo_L11 × System_Number(1–3).
+    Systems 4–10: no template — user fills the timeline manually.
     """
     rows: list[dict] = []
     convert_id = 1
@@ -86,13 +88,13 @@ def all_case_combinations() -> list[dict]:
         for functionality in ("Functional", "Non-functional"):
             for gold_rail in ("Yes", "No"):
                 for ufit_sor in ("Yes", "No"):
-                    for system_number in (1, 2):
+                    for system_number in (1, 2, 3):
                         rows.append(
                             {
                                 "Standard": standard,
                                 "Functionality": functionality,
                                 "Gold_Rail_Selection": gold_rail,
-                                "Ufit_for_SoR": ufit_sor,
+                                ORV3_MGX_WO_L11_COL: ufit_sor,
                                 "System_Number": system_number,
                                 "Convert_ID": convert_id,
                                 "Sheet_Name": f"Case_{convert_id:02d}",
@@ -176,7 +178,7 @@ def write_account_data(account: str) -> dict[str, Path]:
             f"Standard={case['Standard']} | "
             f"Functionality={case['Functionality']} | "
             f"Gold_Rail={case['Gold_Rail_Selection']} | "
-            f"Ufit_SoR={case['Ufit_for_SoR']} | "
+            f"Only_ORv3_MGX_wo_L11={case[ORV3_MGX_WO_L11_COL]} | "
             f"Systems={n_sys}"
         )
         ws.append([meta] + [""] * starter_steps)
@@ -222,7 +224,7 @@ def write_nre_template() -> Path:
         "Phase",
         "Functionality",
         "Gold_Rail_Selection",
-        "Ufit_for_SoR",
+        "Only_ORv3_MGX_Mini_Rack_wo_L11_Rack",
         "Final_Fee",
     ]
     ws.append(headers)
@@ -235,7 +237,7 @@ def write_nre_template() -> Path:
     summary.append(["System_Weight_kg", ""])
     summary.append(["Selected_Phases", ""])
     summary.append(["Gold_Rail_Selection", ""])
-    summary.append(["Ufit_for_SoR", ""])
+    summary.append(["Only_ORv3_MGX_Mini_Rack_wo_L11_Rack", ""])
     summary.append(["Grand_Total_Fee", ""])
 
     path = ROOT / "templates" / "nre_template.xlsx"

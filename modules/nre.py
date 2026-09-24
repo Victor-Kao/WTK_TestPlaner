@@ -7,7 +7,7 @@ from typing import Any
 import pandas as pd
 from openpyxl import load_workbook
 
-from modules.config import NRE_MULTIPLIERS, NRE_TEMPLATE_XLSX
+from modules.config import NRE_MULTIPLIERS, NRE_TEMPLATE_XLSX, ORV3_MGX_WO_L11_COL
 from modules.data_loader import load_location_info, load_test_plan_info, test_info_by_id
 
 
@@ -80,7 +80,7 @@ def build_nre_table(
                     "Phase": phase,
                     "Functionality": functionality,
                     "Gold_Rail_Selection": gold_rail,
-                    "Ufit_for_SoR": ufit_sor,
+                    ORV3_MGX_WO_L11_COL: ufit_sor,
                     "Final_Fee": lab_fee,
                 }
             )
@@ -130,7 +130,7 @@ def export_nre_xlsx(
                     record.get("Phase"),
                     record.get("Functionality"),
                     record.get("Gold_Rail_Selection"),
-                    record.get("Ufit_for_SoR"),
+                    record.get(ORV3_MGX_WO_L11_COL),
                     record.get("Final_Fee"),
                 ]
             )
@@ -145,7 +145,7 @@ def export_nre_xlsx(
                 "Phase_for_Gold_Rail_Selection": meta.get(
                     "gold_rail_phase", "per phase"
                 ),
-                "Ufit_for_SoR": meta.get("ufit_sor", "per phase"),
+                ORV3_MGX_WO_L11_COL: meta.get("ufit_sor", "per phase"),
                 "Grand_Total_Fee": float(nre_df["Final_Fee"].sum())
                 if not nre_df.empty
                 else 0,

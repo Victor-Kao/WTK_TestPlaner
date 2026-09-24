@@ -18,7 +18,10 @@ from modules.config import (
     EMPTY_LABEL,
     EMPTY_TOKEN,
     FUNCTIONALITY_OPTS,
+    ORV3_MGX_WO_L11_COL,
+    ORV3_MGX_WO_L11_LABEL,
     PHASES,
+    PROJECT_PHASES,
     SEQUENCE_TEMPLATE_MAX_SYSTEMS,
     STANDARDS,
     SYSTEM_NUMBERS,
@@ -55,6 +58,7 @@ from modules.timeline import (
     export_timeline_xlsx,
 )
 from modules.synced_calendar import render_synced_calendar
+from modules.usage_log import append_usage_record
 
 st.set_page_config(
     page_title="WTK Test Planner",
@@ -80,6 +84,9 @@ def _init_state() -> None:
         "started_account": None,
         "started_weight_kg": None,
         "started_standard": None,
+        "started_project_name": None,
+        "started_project_phase": None,
+        "plan_log_context": None,
         "catalog_account": None,
         "work_test_plan": None,
         "work_location": None,
@@ -159,11 +166,16 @@ def _normalize_location(df):
 
 def _normalize_convert(df):
     out = df.copy()
+    if (
+        ORV3_MGX_WO_L11_COL not in out.columns
+        and "Ufit_for_SoR" in out.columns
+    ):
+        out = out.rename(columns={"Ufit_for_SoR": ORV3_MGX_WO_L11_COL})
     required = [
         "Standard",
         "Functionality",
         "Gold_Rail_Selection",
-        "Ufit_for_SoR",
+        ORV3_MGX_WO_L11_COL,
         "System_Number",
         "Convert_ID",
     ]
@@ -262,8 +274,26 @@ def _clear_plan_work() -> None:
     st.session_state.timeline = None
     st.session_state.export_df = None
     st.session_state.nre_df = None
+    st.session_state.plan_log_context = None
     st.session_state.editor_version = int(st.session_state.editor_version) + 1
     st.session_state.editor_error = None
+
+
+def _record_download(tool_type: str, **overrides) -> None:
+    """Write a usage-log row for TEST PLAN / NRE / HC downloads."""
+    ctx = dict(st.session_state.get("plan_log_context") or {})
+    ctx.update({k: v for k, v in overrides.items() if v is not None})
+    append_usage_record(
+        tool_type=tool_type,
+        account=ctx.get("account", ""),
+        project=ctx.get("project", ""),
+        phase=ctx.get("phase", ""),
+        weight=ctx.get("weight", ""),
+        system_eta=ctx.get("system_eta", ""),
+        critical_feedback=ctx.get("critical_feedback", ""),
+        system_number=ctx.get("system_number", ""),
+        functional=ctx.get("functional", ""),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -283,6 +313,22 @@ with s2:
 with s3:
     standard = st.selectbox("Standard", STANDARDS, index=0, key="setup_standard")
 
+s4, s5, _ = st.columns(3)
+with s4:
+    project_name = st.text_input(
+        "Project name",
+        value="",
+        key="setup_project_name",
+        placeholder="e.g. Project Apollo",
+    )
+with s5:
+    project_phase = st.selectbox(
+        "Phase",
+        PROJECT_PHASES,
+        index=0,
+        key="setup_project_phase",
+    )
+
 # Switching account before start clears stale catalog-bound work
 if not st.session_state.plan_started:
     if st.session_state.active_account != account:
@@ -292,22 +338,44 @@ if not st.session_state.plan_started:
 start_col, reset_col, _ = st.columns([2, 1, 3])
 with start_col:
     if st.button("Start Arranging Test Plan", type="primary", use_container_width=True):
-        prev = st.session_state.started_account
-        st.session_state.plan_started = True
-        st.session_state.started_account = account
-        st.session_state.started_weight_kg = weight_kg
-        st.session_state.started_standard = standard
-        st.session_state.active_account = account
-        if prev is not None and prev != account:
-            _clear_plan_work()
-            _load_working_catalog_from_disk(account)
-        st.rerun()
+        missing: list[str] = []
+        if not account:
+            missing.append("Account (Brand)")
+        if weight_kg is None:
+            missing.append("System weight (kg)")
+        if not standard:
+            missing.append("Standard")
+        if not (project_name or "").strip():
+            missing.append("Project name")
+        if not project_phase:
+            missing.append("Phase")
+        if missing:
+            st.warning(
+                "Please fill in all setup fields before starting: **"
+                + "**, **".join(missing)
+                + "**."
+            )
+        else:
+            prev = st.session_state.started_account
+            st.session_state.plan_started = True
+            st.session_state.started_account = account
+            st.session_state.started_weight_kg = weight_kg
+            st.session_state.started_standard = standard
+            st.session_state.started_project_name = (project_name or "").strip()
+            st.session_state.started_project_phase = project_phase
+            st.session_state.active_account = account
+            if prev is not None and prev != account:
+                _clear_plan_work()
+                _load_working_catalog_from_disk(account)
+            st.rerun()
 with reset_col:
     if st.session_state.plan_started and st.button("Reset setup", use_container_width=True):
         st.session_state.plan_started = False
         st.session_state.started_account = None
         st.session_state.started_weight_kg = None
         st.session_state.started_standard = None
+        st.session_state.started_project_name = None
+        st.session_state.started_project_phase = None
         _clear_plan_work()
         st.rerun()
 
@@ -325,8 +393,8 @@ info_map = test_info_by_id(test_plan_df)
 
 if not st.session_state.plan_started:
     st.info(
-        "Choose **Account**, **System weight**, and **Standard**, then click "
-        "**Start Arranging Test Plan**."
+        "Fill in **all** setup fields (**Account**, **System weight**, **Standard**, "
+        "**Project name**, **Phase**), then click **Start Arranging Test Plan**."
     )
 else:
     account = st.session_state.started_account or account
@@ -336,11 +404,25 @@ else:
         else weight_kg
     )
     standard = st.session_state.started_standard or standard
+    project_name = st.session_state.started_project_name or project_name or ""
+    project_phase = st.session_state.started_project_phase or project_phase
 
+    proj_bit = f"**Project:** {project_name} &nbsp;|&nbsp; " if project_name else ""
     st.write(
+        f"{proj_bit}**Phase:** {project_phase} &nbsp;|&nbsp; "
         f"**Account:** {account} &nbsp;|&nbsp; **Weight:** {weight_kg:g} kg "
         f"&nbsp;|&nbsp; **Standard:** {standard}"
     )
+
+    def _export_stem() -> str:
+        bits = [account, project_phase]
+        if project_name:
+            safe = "".join(
+                c if c.isalnum() or c in "-_" else "_" for c in project_name
+            ).strip("_")
+            if safe:
+                bits.insert(1, safe)
+        return "_".join(bits)
 
     try:
         _ensure_working_catalog(account)
@@ -404,13 +486,17 @@ else:
                     horizontal=True,
                     key="tp_func",
                 )
-                ufit_sor = st.radio(
-                    "U-fit for L10.5 SoR / ORv3 mini Rack",
-                    YES_NO,
-                    index=1,
-                    horizontal=True,
-                    key="tp_ufit",
-                )
+                is_ocp = "OCP" in str(standard)
+                if is_ocp:
+                    ufit_sor = st.radio(
+                        ORV3_MGX_WO_L11_LABEL,
+                        YES_NO,
+                        index=1,
+                        horizontal=True,
+                        key="tp_ufit",
+                    )
+                else:
+                    ufit_sor = "No"
                 gold_rail = st.radio(
                     "Gold Rail Selection for this plan?",
                     YES_NO,
@@ -436,7 +522,13 @@ else:
                 st.info(
                     f"Case Convert_ID = **{convert_id}** "
                     f"(Standard={standard}, Functionality={functionality}, "
-                    f"Gold Rail={gold_rail}, U-fit L10.5 SoR/ORv3 mini Rack={ufit_sor}, Systems={n_sys})"
+                    f"Gold Rail={gold_rail}"
+                    + (
+                        f", {ORV3_MGX_WO_L11_LABEL}={ufit_sor}"
+                        if is_ocp
+                        else ""
+                    )
+                    + f", Systems={n_sys})"
                 )
             elif not template_supported:
                 st.info(
@@ -489,6 +581,16 @@ else:
                 st.session_state.export_df = None
                 st.session_state.editor_version = int(st.session_state.editor_version) + 1
                 st.session_state.editor_error = None
+                st.session_state.plan_log_context = {
+                    "account": account,
+                    "project": project_name,
+                    "phase": project_phase,
+                    "weight": weight_kg,
+                    "system_eta": system_eta,
+                    "critical_feedback": critical_fb,
+                    "system_number": n_sys,
+                    "functional": functionality,
+                }
                 if msgs:
                     for m in msgs:
                         st.warning(m)
@@ -497,6 +599,18 @@ else:
                     f"(Weekend/Holiday columns locked)."
                 )
             timeline = st.session_state.timeline
+            if timeline is not None:
+                # Keep log context fresh while options widgets are on screen
+                st.session_state.plan_log_context = {
+                    "account": account,
+                    "project": project_name,
+                    "phase": project_phase,
+                    "weight": weight_kg,
+                    "system_eta": system_eta,
+                    "critical_feedback": critical_fb,
+                    "system_number": n_sys,
+                    "functional": functionality,
+                }
             if timeline is None:
                 st.caption("Configure options above, then click **Generate Test Plan**.")
             else:
@@ -688,32 +802,17 @@ else:
                         st.session_state.export_df, st.session_state.timeline
                     )
                     st.dataframe(export_styled, use_container_width=True, hide_index=True)
-                    st.caption(
-                        "Colored download uses **Excel (.xlsx)** — CSV cannot store cell colors."
-                    )
                     xlsx_bytes = export_timeline_xlsx(
                         st.session_state.export_df, st.session_state.timeline
                     )
-                    dl1, dl2 = st.columns(2)
-                    with dl1:
-                        st.download_button(
-                            "Download timeline Excel (with colors)",
-                            data=xlsx_bytes,
-                            file_name=f"{account}_timeline_{date.today().isoformat()}.xlsx",
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                            use_container_width=True,
-                        )
-                    with dl2:
-                        csv_bytes = st.session_state.export_df.to_csv(
-                            index=False
-                        ).encode("utf-8-sig")
-                        st.download_button(
-                            "Download timeline CSV (no colors)",
-                            data=csv_bytes,
-                            file_name=f"{account}_timeline_{date.today().isoformat()}.csv",
-                            mime="text/csv",
-                            use_container_width=True,
-                        )
+                    if st.download_button(
+                        "Download timeline Excel (with colors)",
+                        data=xlsx_bytes,
+                        file_name=f"{_export_stem()}_timeline_{date.today().isoformat()}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    ):
+                        _record_download("TEST PLAN")
+                        st.toast("Usage recorded · TEST PLAN")
 
         # ============================= NRE ========================================
         with tab_nre:
@@ -739,7 +838,12 @@ else:
             for phase in nre_phases:
                 st.divider()
                 st.markdown(f"### {phase}")
-                pc1, pc2, pc3 = st.columns(3)
+                is_ocp = "OCP" in str(standard)
+                if is_ocp:
+                    pc1, pc2, pc3 = st.columns(3)
+                else:
+                    pc1, pc3 = st.columns(2)
+                    pc2 = None
                 with pc1:
                     functionality = st.radio(
                         "Functional / Non-functional",
@@ -747,14 +851,17 @@ else:
                         horizontal=True,
                         key=f"nre_func_{phase}",
                     )
-                with pc2:
-                    ufit_sor = st.radio(
-                        "U-fit for L10.5 SoR / ORv3 mini Rack",
-                        YES_NO,
-                        index=1,
-                        horizontal=True,
-                        key=f"nre_ufit_{phase}",
-                    )
+                if is_ocp and pc2 is not None:
+                    with pc2:
+                        ufit_sor = st.radio(
+                            ORV3_MGX_WO_L11_LABEL,
+                            YES_NO,
+                            index=1,
+                            horizontal=True,
+                            key=f"nre_ufit_{phase}",
+                        )
+                else:
+                    ufit_sor = "No"
                 with pc3:
                     gold_rail = st.radio(
                         "Gold Rail Selection",
@@ -820,6 +927,8 @@ else:
                 used_phases = list(dict.fromkeys(nre_df["Phase"].astype(str).tolist()))
                 meta = {
                     "account": account,
+                    "project_name": project_name,
+                    "project_phase": project_phase,
                     "weight_kg": weight_kg,
                     "standard": standard,
                     "phases": used_phases,
@@ -829,18 +938,29 @@ else:
                     "phase_configs": phase_configs,
                 }
                 xlsx_bytes = export_nre_xlsx(nre_df, meta)
-                st.download_button(
+                nre_functional = ""
+                if phase_configs:
+                    nre_functional = ", ".join(
+                        f"{c['phase']}:{c['functionality']}" for c in phase_configs
+                    )
+                if st.download_button(
                     "Download NRE (XLSX template)",
                     data=xlsx_bytes,
-                    file_name=f"{account}_NRE_{date.today().isoformat()}.xlsx",
+                    file_name=f"{_export_stem()}_NRE_{date.today().isoformat()}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                )
-                st.download_button(
+                    key="nre_dl_xlsx",
+                ):
+                    _record_download("NRE", functional=nre_functional)
+                    st.toast("Usage recorded · NRE")
+                if st.download_button(
                     "Download NRE CSV",
                     data=nre_df.to_csv(index=False).encode("utf-8-sig"),
-                    file_name=f"{account}_NRE_{date.today().isoformat()}.csv",
+                    file_name=f"{_export_stem()}_NRE_{date.today().isoformat()}.csv",
                     mime="text/csv",
-                )
+                    key="nre_dl_csv",
+                ):
+                    _record_download("NRE", functional=nre_functional)
+                    st.toast("Usage recorded · NRE")
 
         # ============================= HEADCOUNT ==================================
         with tab_hc:

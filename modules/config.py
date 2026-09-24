@@ -7,13 +7,18 @@ DATA_DIR = ROOT / "data"
 TEMPLATES_DIR = ROOT / "templates"
 
 ACCOUNTS = ["ROSA", "NAOMI"]
-PHASES = ["Concept", "BCT", "NOT"]
+PHASES = ["Concept", "BCT", "NOT"]  # NRE testing phases
+PROJECT_PHASES = ["C0", "C1", "C2", "C3", "C4", "C5", "C6"]  # setup project phase
 FUNCTIONALITY_OPTS = ["Functional", "Non-functional"]
 YES_NO = ["Yes", "No"]
 SYSTEM_NUMBERS = list(range(1, 11))  # 1…10 systems on the timeline
 # Convert table + Case sequence sheets only define templates through this many systems
-SEQUENCE_TEMPLATE_MAX_SYSTEMS = 2
+SEQUENCE_TEMPLATE_MAX_SYSTEMS = 3
 STANDARDS = ['EIA - 19"', 'OCP - 21" / MGX rack']
+
+# Convert-table / sequence flag (Yes/No): Only ORv3 / MGX Mini Rack w.o L11 Rack
+ORV3_MGX_WO_L11_COL = "Only_ORv3_MGX_Mini_Rack_wo_L11_Rack"
+ORV3_MGX_WO_L11_LABEL = "Only ORv3 / MGX Mini Rack w.o L11 Rack"
 
 EMPTY_TOKEN = "EMPTY"
 EMPTY_LABEL = "Empty"
@@ -37,7 +42,7 @@ NRE_MULTIPLIERS = {
     "phase": {"Concept": 1.0, "BCT": 1.15, "NOT": 1.25},
     "functionality": {"Functional": 1.0, "Non-functional": 0.9},
     "gold_rail": {"Yes": 1.1, "No": 1.0},
-    "ufit_sor": {"Yes": 1.05, "No": 1.0},
+    "ufit_sor": {"Yes": 1.05, "No": 1.0},  # Only_ORv3_MGX_Mini_Rack_wo_L11_Rack flag
 }
 
 

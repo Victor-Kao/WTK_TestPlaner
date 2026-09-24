@@ -12,6 +12,7 @@ import streamlit as st
 from modules.config import (
     HOLIDAY_CACHE_MAX_AGE_DAYS,
     HOLIDAYS_DIR,
+    ORV3_MGX_WO_L11_COL,
     TW_HOLIDAY_CDN,
     TW_HOLIDAY_CDN_FALLBACK,
     account_paths,
@@ -127,7 +128,13 @@ def load_location_info(account: str) -> pd.DataFrame:
 @st.cache_data(show_spinner=False)
 def load_convert_table(account: str) -> pd.DataFrame:
     path = account_paths(account)["convert_table"]
-    return pd.read_csv(path)
+    df = pd.read_csv(path)
+    if (
+        ORV3_MGX_WO_L11_COL not in df.columns
+        and "Ufit_for_SoR" in df.columns
+    ):
+        df = df.rename(columns={"Ufit_for_SoR": ORV3_MGX_WO_L11_COL})
+    return df
 
 
 def lookup_convert_id(
@@ -144,7 +151,7 @@ def lookup_convert_id(
     mask = (
         (df["Functionality"] == functionality)
         & (df["Gold_Rail_Selection"] == gold_rail)
-        & (df["Ufit_for_SoR"] == ufit_sor)
+        & (df[ORV3_MGX_WO_L11_COL] == ufit_sor)
         & (df["System_Number"].astype(int) == int(system_number))
     )
     if standard is not None and "Standard" in df.columns:
@@ -158,7 +165,7 @@ def lookup_convert_id(
 def load_case_sequence(account: str, convert_id: int) -> pd.DataFrame | None:
     """
     Load sequence template for a Convert_ID from the account workbook
-    (one sheet per case: Case_01 … Case_32; Standard × … × systems 1–2 only).
+    (one sheet per case: Case_01 … Case_48; Standard × … × systems 1–3).
 
     Sheet layout (header on Excel row 3) — one token per column:
       Row | 1 | 2 | 3 | 4 | 5 | …

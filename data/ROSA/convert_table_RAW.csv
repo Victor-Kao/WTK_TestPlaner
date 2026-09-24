@@ -1,0 +1,49 @@
+Standard,Functionality,Gold_Rail_Selection,Only_ORv3_MGX_Mini_Rack_wo_L11_Rack,System_Number,Convert_ID,Sheet_Name
+"EIA - 19""",Functional,Yes,Yes,1,1,Case_01
+"EIA - 19""",Functional,Yes,Yes,2,2,Case_02
+"EIA - 19""",Functional,Yes,Yes,3,3,Case_03
+"EIA - 19""",Functional,Yes,No,1,4,Case_04
+"EIA - 19""",Functional,Yes,No,2,5,Case_05
+"EIA - 19""",Functional,Yes,No,3,6,Case_06
+"EIA - 19""",Functional,No,Yes,1,7,Case_07
+"EIA - 19""",Functional,No,Yes,2,8,Case_08
+"EIA - 19""",Functional,No,Yes,3,9,Case_09
+"EIA - 19""",Functional,No,No,1,10,Case_10
+"EIA - 19""",Functional,No,No,2,11,Case_11
+"EIA - 19""",Functional,No,No,3,12,Case_12
+"EIA - 19""",Non-functional,Yes,Yes,1,13,Case_13
+"EIA - 19""",Non-functional,Yes,Yes,2,14,Case_14
+"EIA - 19""",Non-functional,Yes,Yes,3,15,Case_15
+"EIA - 19""",Non-functional,Yes,No,1,16,Case_16
+"EIA - 19""",Non-functional,Yes,No,2,17,Case_17
+"EIA - 19""",Non-functional,Yes,No,3,18,Case_18
+"EIA - 19""",Non-functional,No,Yes,1,19,Case_19
+"EIA - 19""",Non-functional,No,Yes,2,20,Case_20
+"EIA - 19""",Non-functional,No,Yes,3,21,Case_21
+"EIA - 19""",Non-functional,No,No,1,22,Case_22
+"EIA - 19""",Non-functional,No,No,2,23,Case_23
+"EIA - 19""",Non-functional,No,No,3,24,Case_24
+"OCP - 21"" / MGX rack",Functional,Yes,Yes,1,25,Case_25
+"OCP - 21"" / MGX rack",Functional,Yes,Yes,2,26,Case_26
+"OCP - 21"" / MGX rack",Functional,Yes,Yes,3,27,Case_27
+"OCP - 21"" / MGX rack",Functional,Yes,No,1,28,Case_28
+"OCP - 21"" / MGX rack",Functional,Yes,No,2,29,Case_29
+"OCP - 21"" / MGX rack",Functional,Yes,No,3,30,Case_30
+"OCP - 21"" / MGX rack",Functional,No,Yes,1,31,Case_31
+"OCP - 21"" / MGX rack",Functional,No,Yes,2,32,Case_32
+"OCP - 21"" / MGX rack",Functional,No,Yes,3,33,Case_33
+"OCP - 21"" / MGX rack",Functional,No,No,1,34,Case_34
+"OCP - 21"" / MGX rack",Functional,No,No,2,35,Case_35
+"OCP - 21"" / MGX rack",Functional,No,No,3,36,Case_36
+"OCP - 21"" / MGX rack",Non-functional,Yes,Yes,1,37,Case_37
+"OCP - 21"" / MGX rack",Non-functional,Yes,Yes,2,38,Case_38
+"OCP - 21"" / MGX rack",Non-functional,Yes,Yes,3,39,Case_39
+"OCP - 21"" / MGX rack",Non-functional,Yes,No,1,40,Case_40
+"OCP - 21"" / MGX rack",Non-functional,Yes,No,2,41,Case_41
+"OCP - 21"" / MGX rack",Non-functional,Yes,No,3,42,Case_42
+"OCP - 21"" / MGX rack",Non-functional,No,Yes,1,43,Case_43
+"OCP - 21"" / MGX rack",Non-functional,No,Yes,2,44,Case_44
+"OCP - 21"" / MGX rack",Non-functional,No,Yes,3,45,Case_45
+"OCP - 21"" / MGX rack",Non-functional,No,No,1,46,Case_46
+"OCP - 21"" / MGX rack",Non-functional,No,No,2,47,Case_47
+"OCP - 21"" / MGX rack",Non-functional,No,No,3,48,Case_48
