@@ -1016,9 +1016,12 @@ def timeline_to_export_df(
     """
     Export layout:
       Row 0: Date
-      Row 1: Event (Holiday / Weekend / System ETA / Critical Feedback)
-      Row 2+: one row per system — same cell, two lines when profile exists:
-        line 1 = Abbrv, line 2 = PROFILE note.
+      Row 1: Event
+      Then for each system:
+        - schedule row (test items)
+        - profile row under it (weight-band notes; blank if none)
+      First-column label is the system name on the schedule row and blank on the
+      profile row so Excel can vertically merge them into one cell.
     """
     dates = timeline["dates"]
     markers = timeline["markers"]
@@ -1038,28 +1041,28 @@ def timeline_to_export_df(
     rows.append(mark_row)
 
     for row_key in sorted_system_keys(timeline):
-        r = {"Row": row_key}
+        schedule = {"Row": row_key}
+        profile = {"Row": ""}  # blank — merged with schedule label in Excel
         for d in dates:
             cell = grid[row_key].get(d)
             if not cell:
-                r[d] = ""
+                schedule[d] = ""
+                profile[d] = ""
             elif cell.get("is_empty"):
-                r[d] = EMPTY_TOKEN
+                schedule[d] = EMPTY_TOKEN
+                profile[d] = ""
             else:
                 tid = str(cell.get("test_id", "") or "").strip()
                 abbrv = (cell.get("abbrv") or tid).strip()
-                detail = ""
+                schedule[d] = f"{abbrv} ({tid})" if tid else abbrv
+                note = ""
                 if profile_col and detail_by_id and tid:
                     meta = detail_by_id.get(tid)
                     if meta:
-                        detail = (meta.get(profile_col, "") or "").strip()
-                if detail:
-                    r[d] = f"{abbrv}\n{detail}"
-                elif tid:
-                    r[d] = f"{abbrv} ({tid})"
-                else:
-                    r[d] = abbrv
-        rows.append(r)
+                        note = (meta.get(profile_col, "") or "").strip()
+                profile[d] = note
+        rows.append(schedule)
+        rows.append(profile)
 
     return pd.DataFrame(rows)
 
@@ -1113,6 +1116,113 @@ def style_timeline_display(df: pd.DataFrame, timeline: dict[str, Any]):
         return styles
 
     return df.style.apply(_row_style, axis=1)
+
+
+def export_timeline_xlsx(df: pd.DataFrame, timeline: dict[str, Any]) -> bytes:
+    """
+    Write export table to XLSX with the same fills as the on-screen table:
+      - Weekend / Holiday columns → light red
+      - Event row System ETA / Critical Feedback → light yellow
+      - System name + profile rows: first column vertically merged
+    CSV cannot store colors or merges; use this for colored downloads.
+    """
+    from io import BytesIO
+
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font, PatternFill
+
+    blocked = set(timeline.get("blocked", []))
+    markers = timeline.get("markers", {})
+    milestone_dates = {
+        d
+        for d, tags in markers.items()
+        if "System ETA" in tags or "Critical Feedback" in tags
+    }
+    fill_blocked = PatternFill(
+        start_color=BLOCKED_FILL.lstrip("#"),
+        end_color=BLOCKED_FILL.lstrip("#"),
+        fill_type="solid",
+    )
+    fill_milestone = PatternFill(
+        start_color=EVENT_MILESTONE_FILL.lstrip("#"),
+        end_color=EVENT_MILESTONE_FILL.lstrip("#"),
+        fill_type="solid",
+    )
+    header_font = Font(bold=True)
+    wrap = Alignment(wrap_text=True, vertical="top")
+    center_left = Alignment(wrap_text=True, vertical="center", horizontal="left")
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Timeline"
+
+    columns = list(df.columns)
+    for col_idx, col_name in enumerate(columns, start=1):
+        cell = ws.cell(row=1, column=col_idx, value=str(col_name))
+        cell.font = header_font
+        if col_name in blocked:
+            cell.fill = fill_blocked
+
+    records = df.to_dict(orient="records")
+    excel_row = 2
+    i = 0
+    while i < len(records):
+        record = records[i]
+        row_label = "" if record.get("Row") is None else str(record.get("Row"))
+        next_label = None
+        if i + 1 < len(records):
+            nxt = records[i + 1].get("Row")
+            next_label = "" if nxt is None else str(nxt)
+
+        # System schedule + following blank-label profile row → merge first column
+        merge_pair = (
+            row_label not in ("", "Date", "Event")
+            and next_label == ""
+        )
+
+        def _write_data_row(rec: dict, r_idx: int, *, is_event: bool) -> None:
+            for col_idx, col_name in enumerate(columns, start=1):
+                raw = rec.get(col_name, "")
+                if raw is None or (isinstance(raw, float) and pd.isna(raw)):
+                    value = ""
+                else:
+                    value = str(raw)
+                cell = ws.cell(row=r_idx, column=col_idx, value=value)
+                cell.alignment = wrap
+                if col_name == "Row":
+                    continue
+                if col_name in blocked:
+                    cell.fill = fill_blocked
+                elif is_event and col_name in milestone_dates:
+                    cell.fill = fill_milestone
+
+        if merge_pair:
+            _write_data_row(record, excel_row, is_event=False)
+            _write_data_row(records[i + 1], excel_row + 1, is_event=False)
+            # Merge first column; keep system name centered across both rows
+            ws.merge_cells(
+                start_row=excel_row,
+                start_column=1,
+                end_row=excel_row + 1,
+                end_column=1,
+            )
+            label_cell = ws.cell(row=excel_row, column=1, value=row_label)
+            label_cell.alignment = center_left
+            excel_row += 2
+            i += 2
+        else:
+            _write_data_row(record, excel_row, is_event=(row_label == "Event"))
+            excel_row += 1
+            i += 1
+
+    ws.column_dimensions["A"].width = 16
+    for col_idx in range(2, len(columns) + 1):
+        letter = ws.cell(row=1, column=col_idx).column_letter
+        ws.column_dimensions[letter].width = 18
+
+    buf = BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
 
 
 def fillable_dates(timeline: dict[str, Any]) -> list[str]:

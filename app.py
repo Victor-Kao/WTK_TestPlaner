@@ -52,6 +52,7 @@ from modules.timeline import (
     shift_system_schedule,
     style_timeline_display,
     timeline_to_export_df,
+    export_timeline_xlsx,
 )
 from modules.synced_calendar import render_synced_calendar
 
@@ -679,7 +680,7 @@ else:
                     )
                     st.success(
                         "Timeline converted to export table "
-                        "(item on line 1, profile note on line 2 in the same cell)."
+                        "(system schedule row + profile row; Excel merges the system name)."
                     )
 
                 if st.session_state.export_df is not None:
@@ -687,15 +688,32 @@ else:
                         st.session_state.export_df, st.session_state.timeline
                     )
                     st.dataframe(export_styled, use_container_width=True, hide_index=True)
-                    csv_bytes = st.session_state.export_df.to_csv(index=False).encode(
-                        "utf-8-sig"
+                    st.caption(
+                        "Colored download uses **Excel (.xlsx)** — CSV cannot store cell colors."
                     )
-                    st.download_button(
-                        "Download timeline CSV",
-                        data=csv_bytes,
-                        file_name=f"{account}_timeline_{date.today().isoformat()}.csv",
-                        mime="text/csv",
+                    xlsx_bytes = export_timeline_xlsx(
+                        st.session_state.export_df, st.session_state.timeline
                     )
+                    dl1, dl2 = st.columns(2)
+                    with dl1:
+                        st.download_button(
+                            "Download timeline Excel (with colors)",
+                            data=xlsx_bytes,
+                            file_name=f"{account}_timeline_{date.today().isoformat()}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            use_container_width=True,
+                        )
+                    with dl2:
+                        csv_bytes = st.session_state.export_df.to_csv(
+                            index=False
+                        ).encode("utf-8-sig")
+                        st.download_button(
+                            "Download timeline CSV (no colors)",
+                            data=csv_bytes,
+                            file_name=f"{account}_timeline_{date.today().isoformat()}.csv",
+                            mime="text/csv",
+                            use_container_width=True,
+                        )
 
         # ============================= NRE ========================================
         with tab_nre:

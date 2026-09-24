@@ -2,10 +2,26 @@ Test_ID,Testplan_Item,Duration_Days,Duration_for_NRE,Abbrv_Name,Lab_Rate,PROFILE
 SV0106,NonOp Half Sine Shock Test Procedure,1,5,Non-Op HS,140,"6 Sides, 71G,2ms","6 Sides, 71G,2ms","6 Sides, 71G,2ms","BOTTOM Sides, 71G,2ms"
 SV0103,NonOp Long Duration Half Sine Shock Test Procedure,1,5,Non-Op LDHS,140,"6 Sides, 40G, 25ms, 246ips","6 Sides, 35G, 25ms,215ips","6 Sides, 30G, 25ms,184ips","BOTTOM Side, 25G, 25ms,154ips"
 SV0126,Non-Operational Half Sine Shock Test Procedure for ORV3 Rack Systems,1,4,Non-Op ORV3 HS,140,"3 axis, 25G, 3ms","3 axis, 25G, 3ms","3 axis, 25G, 3ms","3 axis, 20G, 3ms"
-SV0125,Non Op Random Vib Test Procedure for ORv3 Rack Systems,2,5,Non-Op ORV3 Random Vibration,125,"3 axis, Vertical SS 0.46 Grms + AP,  Horizontal 0.39 Grms","3 axis, Vertical SS 0.46 Grms + AP,  Horizontal 0.39 Grms","3 axis, Vertical SS 0.46 Grms + AP,  Horizontal 0.39 Grms","3 axis, Vertical SS 0.46 Grms + AP,  Horizontal 0.39 Grms"
+SV0125,Non Op Random Vib Test Procedure for ORv3 Rack Systems,2,5,Non-Op ORV3 Random Vibration,125,"3 axis, 
+Vertical SS 0.46 Grms + AP,  
+Horizontal 0.39 Grms","3 axis, 
+Vertical SS 0.46 Grms + AP,  
+Horizontal 0.39 Grms","3 axis, 
+Vertical SS 0.46 Grms + AP,  
+Horizontal 0.39 Grms","3 axis, 
+Vertical SS 0.46 Grms + AP,  
+Horizontal 0.39 Grms"
 SV0102,NonOp Random Vibration Test Procedure,2,6,Non-Op Random Vibration,125,"6 Sides, 1.38 Grms","6 Sides, 1.38 Grms","6 Sides, 1.38 Grms","BOTTOM Side, 1.38 Grms"
 SV0117,Non-Operational Half Sine Shock Test Procedure for Rack Systems,1,5,Non-Op SoR HS,175,"3 axis, 25G, 3ms","3 axis, 25G, 3ms","3 axis, 25G, 3ms","3 axis, 20G, 3ms"
-SV0118,Non-Operational Random Vibration Test Procedure for Rack Systems,2,4,Non-Op SoR Random Vibration,125,"3 axis, Vertical 0.47 Grms,  Horizontal 0.39 Grms","3 axis, Vertical 0.47 Grms,  Horizontal 0.39 Grms","3 axis, Vertical 0.47 Grms,  Horizontal 0.39 Grms","3 axis, Vertical 0.47 Grms,  Horizontal 0.39 Grms"
+SV0118,Non-Operational Random Vibration Test Procedure for Rack Systems,2,4,Non-Op SoR Random Vibration,125,"3 axis, 
+Vertical 0.47 Grms,  
+Horizontal 0.39 Grms","3 axis, 
+Vertical 0.47 Grms,  
+Horizontal 0.39 Grms","3 axis, 
+Vertical 0.47 Grms,  
+Horizontal 0.39 Grms","3 axis, 
+Vertical 0.47 Grms,  
+Horizontal 0.39 Grms"
 SV0107,Operational Half Sine Shock Test Procedure,2,4,Op HS,113,"3 axis, 6G, 11ms","3 axis, 6G, 11ms","3 axis, 6G, 11ms","3 axis, 6G, 11ms"
 SV0127,Operational Random Vib Test Procedure for ORv3 Rack Systems,2,4,Op ORV3  Random Vibration,140,"3 axis, 0.21 Grms","3 axis, 0.21 Grms","3 axis, 0.21 Grms","3 axis, 0.21 Grms"
 SV0128,Operational Half Sine Shock Test Procedure for ORV3  Rack Systems,2,5,Op ORV3 HS,113,"3 axis, 6G, 11ms","3 axis, 6G, 11ms","3 axis, 6G, 11ms","3 axis, 6G, 11ms"
