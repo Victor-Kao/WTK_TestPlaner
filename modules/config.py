@@ -29,6 +29,28 @@ CELL_POSTPONE_OPT = "Postpone (+1) from here ▶"
 
 NRE_TEMPLATE_XLSX = TEMPLATES_DIR / "nre_template.xlsx"
 
+# NRE extras shown under the test-item selector (not in the multiselect list)
+NRE_OM_ID = "REL0164_OM"
+NRE_DNP_ID = "REL0164_DNP"
+NRE_UFIT_ID = "ENG0013791_UFIT"  # U-fit / Leading Edge
+NRE_AUX_COST_IDS = ("AUX_1", "AUX_2", "AUX_3")  # Wooden Fixture, DummyWeight, Rack Building
+NRE_AUX_COST_DEFAULTS_USD = {
+    "AUX_1": 3000.0,  # Wooden Fixture
+    "AUX_2": 0.0,  # DummyWeight
+    "AUX_3": 0.0,  # Rack Building / Modification
+}
+# Free / non-billable catalog items — never offered in the NRE multiselect
+NRE_FREE_TEST_IDS = frozenset({"ENG0013791_CHECK"})  # Pre-Process
+NRE_SELECTOR_EXTRA_IDS = frozenset(
+    {
+        NRE_OM_ID,
+        NRE_DNP_ID,
+        NRE_UFIT_ID,
+        *NRE_AUX_COST_IDS,
+        *NRE_FREE_TEST_IDS,
+    }
+)
+
 # Taiwan holidays: CDN is source of truth; local JSON is a refreshable cache
 HOLIDAYS_DIR = DATA_DIR / "holidays"
 HOLIDAY_CACHE_MAX_AGE_DAYS = 30  # re-fetch from CDN when cache older than this
@@ -60,4 +82,11 @@ def account_paths(account: str) -> dict[str, Path]:
         "location_info": base / "location_info.csv",
         "convert_table": base / "convert_table.csv",
         "sequence_xlsx": base / "test_item_sequence_all_cases.xlsx",
+        "nre_template": base / f"NRE_TEMPLATE_{account}.xlsx",
     }
+
+
+def nre_template_path(account: str) -> Path:
+    """Account NRE workbook template (falls back to templates/nre_template.xlsx)."""
+    path = account_paths(account)["nre_template"]
+    return path if path.exists() else NRE_TEMPLATE_XLSX

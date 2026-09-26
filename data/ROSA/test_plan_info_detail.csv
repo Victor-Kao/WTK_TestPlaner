@@ -26,7 +26,7 @@ SV0107,Operational Half Sine Shock Test Procedure,2,4,Op HS,113,"3 axis, 6G, 11m
 SV0127,Operational Random Vib Test Procedure for ORv3 Rack Systems,2,4,Op ORV3  Random Vibration,140,"3 axis, 0.21 Grms","3 axis, 0.21 Grms","3 axis, 0.21 Grms","3 axis, 0.21 Grms"
 SV0128,Operational Half Sine Shock Test Procedure for ORV3  Rack Systems,2,5,Op ORV3 HS,113,"3 axis, 6G, 11ms","3 axis, 6G, 11ms","3 axis, 6G, 11ms","3 axis, 6G, 11ms"
 SV0105,Operational Random Vibration Test Procedure,2,5,Op Random Vibration,140,"3 axis, 0.21 Grms","3 axis, 0.21 Grms","3 axis, 0.21 Grms","3 axis, 0.21 Grms"
-SV0114,Rack and Stack Vibration Test,1,,RnS - L11,800,SS+AP,SS+AP,SS+AP,SS+AP
+SV0114,Rack and Stack Vibration Test,1,1,RnS - L11,800,SS+AP,SS+AP,SS+AP,SS+AP
 ENG0013791_CHECK,Pre/Post Process and Function Check,1,0,Pre-Process,0,,,,
 ENG0013791_UFIT,U-envelop measurement ,1,1,U-fit / Leading Edge ,33,,,,
 ENG0013791_GRS,Gold Rail selection,2,3,Gold Rail selection,33,,,,

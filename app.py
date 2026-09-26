@@ -18,6 +18,12 @@ from modules.config import (
     EMPTY_LABEL,
     EMPTY_TOKEN,
     FUNCTIONALITY_OPTS,
+    NRE_AUX_COST_DEFAULTS_USD,
+    NRE_AUX_COST_IDS,
+    NRE_DNP_ID,
+    NRE_OM_ID,
+    NRE_SELECTOR_EXTRA_IDS,
+    NRE_UFIT_ID,
     ORV3_MGX_WO_L11_COL,
     ORV3_MGX_WO_L11_LABEL,
     PHASES,
@@ -28,20 +34,22 @@ from modules.config import (
     YES_NO,
 )
 from modules.data_loader import (
+    PROFILE_COLUMNS,
     load_convert_table,
     load_location_info,
     load_test_plan_info,
-    load_test_plan_info_detail,
     lookup_convert_id,
     load_case_sequence,
     test_detail_by_id,
     test_info_by_id,
 )
 from modules.nre import (
+    aux_costs_have_content,
     build_nre_table,
-    collect_test_ids_from_timeline,
-    default_test_ids_for_filters,
     export_nre_xlsx,
+    first_nre_phase,
+    phase_has_nre_content,
+    pivot_nre_for_template,
 )
 from modules.timeline import (
     apply_sequence_template,
@@ -148,11 +156,19 @@ def _normalize_test_plan(df):
     if missing:
         raise ValueError(f"Test plan table missing columns: {missing}")
     out["Test_ID"] = out["Test_ID"].astype(str).str.strip()
-    out["Duration_Days"] = out["Duration_Days"].astype(int)
+    out["Duration_Days"] = (
+        pd.to_numeric(out["Duration_Days"], errors="coerce").fillna(0).astype(int)
+    )
     out["Duration_for_NRE"] = pd.to_numeric(
         out["Duration_for_NRE"], errors="coerce"
     ).fillna(0)
     out["Lab_Rate"] = pd.to_numeric(out["Lab_Rate"], errors="coerce").fillna(0)
+    for col in PROFILE_COLUMNS:
+        if col not in out.columns:
+            out[col] = ""
+        else:
+            out[col] = out[col].fillna("").astype(str).str.strip()
+            out.loc[out[col].str.lower().isin(("nan", "none")), col] = ""
     return out
 
 
@@ -235,6 +251,11 @@ def _excluded_test_ids_for_plan(
     return excluded
 
 
+def _set_nre_selected_ids(ids_key: str, ids: list[str]) -> None:
+    """on_click helper: set NRE multiselect selection before widgets render."""
+    st.session_state[ids_key] = list(ids)
+
+
 def _select_options(
     info: dict,
     *,
@@ -313,20 +334,13 @@ with s2:
 with s3:
     standard = st.selectbox("Standard", STANDARDS, index=0, key="setup_standard")
 
-s4, s5, _ = st.columns(3)
+s4, _, _ = st.columns(3)
 with s4:
     project_name = st.text_input(
         "Project name",
         value="",
         key="setup_project_name",
         placeholder="e.g. Project Apollo",
-    )
-with s5:
-    project_phase = st.selectbox(
-        "Phase",
-        PROJECT_PHASES,
-        index=0,
-        key="setup_project_phase",
     )
 
 # Switching account before start clears stale catalog-bound work
@@ -347,8 +361,6 @@ with start_col:
             missing.append("Standard")
         if not (project_name or "").strip():
             missing.append("Project name")
-        if not project_phase:
-            missing.append("Phase")
         if missing:
             st.warning(
                 "Please fill in all setup fields before starting: **"
@@ -362,7 +374,6 @@ with start_col:
             st.session_state.started_weight_kg = weight_kg
             st.session_state.started_standard = standard
             st.session_state.started_project_name = (project_name or "").strip()
-            st.session_state.started_project_phase = project_phase
             st.session_state.active_account = account
             if prev is not None and prev != account:
                 _clear_plan_work()
@@ -376,6 +387,7 @@ with reset_col:
         st.session_state.started_standard = None
         st.session_state.started_project_name = None
         st.session_state.started_project_phase = None
+        st.session_state.pop("tp_project_phase", None)
         _clear_plan_work()
         st.rerun()
 
@@ -394,7 +406,7 @@ info_map = test_info_by_id(test_plan_df)
 if not st.session_state.plan_started:
     st.info(
         "Fill in **all** setup fields (**Account**, **System weight**, **Standard**, "
-        "**Project name**, **Phase**), then click **Start Arranging Test Plan**."
+        "**Project name**), then click **Start Arranging Test Plan**."
     )
 else:
     account = st.session_state.started_account or account
@@ -405,7 +417,11 @@ else:
     )
     standard = st.session_state.started_standard or standard
     project_name = st.session_state.started_project_name or project_name or ""
-    project_phase = st.session_state.started_project_phase or project_phase
+    project_phase = (
+        st.session_state.get("tp_project_phase")
+        or st.session_state.get("started_project_phase")
+        or PROJECT_PHASES[0]
+    )
 
     proj_bit = f"**Project:** {project_name} &nbsp;|&nbsp; " if project_name else ""
     st.write(
@@ -461,6 +477,13 @@ else:
 
             left, right = st.columns(2)
             with left:
+                project_phase = st.selectbox(
+                    "Phase",
+                    PROJECT_PHASES,
+                    index=0,
+                    key="tp_project_phase",
+                )
+                st.session_state.started_project_phase = project_phase
                 system_eta = st.date_input(
                     "System ETA", value=date.today() + timedelta(days=7)
                 )
@@ -672,7 +695,7 @@ else:
                             )
                         st.rerun()
 
-                detail_map = test_detail_by_id(load_test_plan_info_detail(account))
+                detail_map = test_detail_by_id(st.session_state.work_test_plan)
                 event = render_synced_calendar(
                     timeline,
                     options,
@@ -784,9 +807,7 @@ else:
                 st.divider()
                 st.subheader("3. Update → Export Table")
                 if st.button("Update", type="primary"):
-                    detail_map = test_detail_by_id(
-                        load_test_plan_info_detail(account)
-                    )
+                    detail_map = test_detail_by_id(st.session_state.work_test_plan)
                     st.session_state.export_df = timeline_to_export_df(
                         st.session_state.timeline,
                         weight_kg=float(weight_kg),
@@ -818,11 +839,14 @@ else:
         with tab_nre:
             st.subheader("NRE Estimation")
             st.caption(
-            "Select one or more testing phases. Each phase opens its own section "
-            "(options + test items). "
-            "**Lab_Fee / Final_Fee** = Duration_for_NRE (hr) × Lab_Rate. "
-            "`Duration_Days` is only for the timeline (days)."
-        )
+                "Select one or more testing phases. Fixture / rack USD costs are "
+                "one-time (under Testing Phase) and land on the earliest selected "
+                "phase in the Excel template. Each phase has its own options + "
+                "test items. "
+                "Generated table matches `NRE_TEMPLATE_<account>.xlsx` "
+                "(Test Item (ID) · Location · Rate · Concept/BCT/NOT · Sub Total). "
+                "**Sub Total** in Excel = `SUM(Concept:NOT) × Lab Rate`."
+            )
 
             nre_phases = st.multiselect(
                 "Testing Phase (multi-select)",
@@ -831,7 +855,30 @@ else:
                 key="nre_phases",
             )
 
-            from_timeline = collect_test_ids_from_timeline(st.session_state.timeline)
+            st.caption(
+                "One-time fixture / rack charges (USD) — applied once to the "
+                "earliest selected phase "
+                f"({first_nre_phase(list(nre_phases)) or '—'})."
+            )
+            aux_costs: dict[str, float] = {}
+            aux_cols = st.columns(len(NRE_AUX_COST_IDS))
+            for col, tid in zip(aux_cols, NRE_AUX_COST_IDS):
+                label = (
+                    info_map[tid]["Abbrv_Name"] if tid in info_map else tid
+                )
+                with col:
+                    aux_costs[tid] = float(
+                        st.number_input(
+                            f"{label} (USD)",
+                            min_value=0.0,
+                            step=100.0,
+                            value=float(
+                                NRE_AUX_COST_DEFAULTS_USD.get(tid, 0.0)
+                            ),
+                            key=f"nre_aux_cost_{tid}",
+                        )
+                    )
+
             all_ids = list(test_plan_df["Test_ID"].astype(str))
             phase_configs: list[dict] = []
 
@@ -871,22 +918,109 @@ else:
                     )
 
                 ids_key = f"nre_ids_{phase}"
+                excluded = _excluded_test_ids_for_plan(
+                    standard, functionality, gold_rail
+                )
+                # OM / DnP / U-fit / AUX costs are entered outside the list
+                allowed_ids = [
+                    tid
+                    for tid in all_ids
+                    if str(tid).strip() not in excluded
+                    and str(tid).strip() not in NRE_SELECTOR_EXTRA_IDS
+                ]
                 if ids_key not in st.session_state:
-                    defaults = from_timeline or default_test_ids_for_filters(
-                        functionality,
-                        gold_rail,
-                        ufit_sor,
-                        account=account,
-                        test_plan_df=test_plan_df,
-                    )
-                    st.session_state[ids_key] = [i for i in defaults if i in all_ids]
+                    # Each newly added phase defaults to Select all for its own filters
+                    st.session_state[ids_key] = list(allowed_ids)
+                else:
+                    # Drop selections that the current EIA/OCP · Func · Gold filters exclude
+                    kept = [
+                        i
+                        for i in list(st.session_state[ids_key])
+                        if i in allowed_ids
+                    ]
+                    if kept != list(st.session_state[ids_key]):
+                        st.session_state[ids_key] = kept
 
                 selected_ids = st.multiselect(
                     f"Test items included in NRE — {phase}",
-                    options=all_ids,
-                    format_func=lambda tid: f"{info_map[tid]['Abbrv_Name']} ({tid})",
+                    options=allowed_ids,
+                    format_func=lambda tid: (
+                        f"{info_map[tid]['Abbrv_Name']} ({tid})"
+                        if tid in info_map
+                        else str(tid)
+                    ),
                     key=ids_key,
+                    help=(
+                        "Same filters as Test Plan: Standard (EIA/OCP), "
+                        "Functional / Non-functional, and Gold Rail. "
+                        "OM / DnP and U-fit quantity are below; "
+                        "fixture / rack costs are under Testing Phase."
+                    ),
                 )
+                sel_col, clr_col, _ = st.columns([1, 1, 4])
+                with sel_col:
+                    st.button(
+                        "Select all",
+                        key=f"nre_sel_all_{phase}",
+                        use_container_width=True,
+                        on_click=_set_nre_selected_ids,
+                        args=(ids_key, list(allowed_ids)),
+                    )
+                with clr_col:
+                    st.button(
+                        "Remove all",
+                        key=f"nre_clr_all_{phase}",
+                        use_container_width=True,
+                        on_click=_set_nre_selected_ids,
+                        args=(ids_key, []),
+                    )
+
+                qty_by_id: dict[str, int] = {}
+                # U-fit / Leading Edge: default 4, or 3 when Gold Rail = Yes
+                ufit_default = 3 if gold_rail == "Yes" else 4
+                ufit_key = f"nre_qty_ufit_{phase}"
+                ufit_gold_track = f"_nre_ufit_gold_{phase}"
+                if (
+                    ufit_gold_track not in st.session_state
+                    or st.session_state[ufit_gold_track] != gold_rail
+                ):
+                    st.session_state[ufit_key] = ufit_default
+                    st.session_state[ufit_gold_track] = gold_rail
+                st.caption("U-fit / Leading Edge quantity")
+                qty_by_id[NRE_UFIT_ID] = int(
+                    st.number_input(
+                        "U-fit / Leading Edge quantity",
+                        min_value=0,
+                        step=1,
+                        key=ufit_key,
+                        help="Default 4; default 3 when Gold Rail is Yes.",
+                    )
+                )
+
+                if functionality == "Functional":
+                    st.caption("OM / DnP quantity (Functional)")
+                    om_col, dnp_col = st.columns(2)
+                    with om_col:
+                        qty_by_id[NRE_OM_ID] = int(
+                            st.number_input(
+                                "OM quantity",
+                                min_value=0,
+                                step=1,
+                                value=0,
+                                key=f"nre_qty_om_{phase}",
+                            )
+                        )
+                    with dnp_col:
+                        qty_by_id[NRE_DNP_ID] = int(
+                            st.number_input(
+                                "DnP quantity",
+                                min_value=0,
+                                step=1,
+                                value=0,
+                                key=f"nre_qty_dnp_{phase}",
+                            )
+                        )
+
                 phase_configs.append(
                     {
                         "phase": phase,
@@ -894,35 +1028,46 @@ else:
                         "gold_rail": gold_rail,
                         "ufit_sor": ufit_sor,
                         "test_ids": list(selected_ids),
+                        "qty_by_id": qty_by_id,
                     }
                 )
 
             if st.button("Generate NRE Table", type="primary"):
+                has_phase = any(phase_has_nre_content(cfg) for cfg in phase_configs)
+                has_aux = aux_costs_have_content(aux_costs)
                 if not nre_phases:
                     st.error("Select at least one phase.")
-                elif not any(cfg["test_ids"] for cfg in phase_configs):
-                    st.error("Select at least one test item in a phase section.")
+                elif not has_phase and not has_aux:
+                    st.error(
+                        "Select at least one test item, OM/DnP/U-fit quantity, "
+                        "or fixture/rack cost."
+                    )
                 else:
                     missing = [
-                        cfg["phase"] for cfg in phase_configs if not cfg["test_ids"]
+                        cfg["phase"]
+                        for cfg in phase_configs
+                        if not phase_has_nre_content(cfg)
                     ]
-                    if missing:
+                    if missing and has_phase:
                         st.warning(
-                            "No test items selected for: " + ", ".join(missing)
-                            + " — those phases will be skipped."
+                            "No NRE test content for: " + ", ".join(missing)
+                            + " — those phases will be skipped "
+                            "(fixture / rack still use the earliest phase)."
                         )
                     st.session_state.nre_df = build_nre_table(
-                        [cfg for cfg in phase_configs if cfg["test_ids"]],
+                        phase_configs,
                         account=account,
                         test_plan_df=test_plan_df,
                         location_df=location_df,
+                        aux_costs=aux_costs,
                     )
 
             if st.session_state.nre_df is not None and not st.session_state.nre_df.empty:
                 nre_df = st.session_state.nre_df
-                st.dataframe(nre_df, use_container_width=True, hide_index=True)
-                grand = float(nre_df["Final_Fee"].sum())
-                st.metric("Final Fee (grand total)", f"{grand:,.0f}")
+                nre_view = pivot_nre_for_template(nre_df)
+                st.dataframe(nre_view, use_container_width=True, hide_index=True)
+                grand = float(nre_view["Sub Total"].fillna(0).sum())
+                st.metric("Sub Total (grand total)", f"{grand:,.0f}")
 
                 used_phases = list(dict.fromkeys(nre_df["Phase"].astype(str).tolist()))
                 meta = {
@@ -952,15 +1097,6 @@ else:
                 ):
                     _record_download("NRE", functional=nre_functional)
                     st.toast("Usage recorded · NRE")
-                if st.download_button(
-                    "Download NRE CSV",
-                    data=nre_df.to_csv(index=False).encode("utf-8-sig"),
-                    file_name=f"{_export_stem()}_NRE_{date.today().isoformat()}.csv",
-                    mime="text/csv",
-                    key="nre_dl_csv",
-                ):
-                    _record_download("NRE", functional=nre_functional)
-                    st.toast("Usage recorded · NRE")
 
         # ============================= HEADCOUNT ==================================
         with tab_hc:
@@ -980,7 +1116,8 @@ if account == "ROSA":
     st.divider()
     with st.expander("Data preview / edit (session only)", expanded=False):
         st.caption(
-            f"Source folder: `data/{account}/` · working copy has "
+            f"Source folder: `data/{account}/` · catalog from "
+            f"`test_plan_info_detail.csv` · working copy has "
             f"**{len(st.session_state.work_test_plan)}** test items. "
             "Edit below, then click **Update loaded data**. "
             "Folder CSVs are not overwritten."
@@ -998,7 +1135,7 @@ if account == "ROSA":
         with st.form("catalog_edit_form", clear_on_submit=False):
             rev = int(st.session_state.get("catalog_edit_rev", 0))
             prev_tab1, prev_tab2, prev_tab3 = st.tabs(
-                ["Test Plan Info", "Location Info", "Convert Table"]
+                ["Test Plan Info (detail)", "Location Info", "Convert Table"]
             )
             with prev_tab1:
                 edited_plan = st.data_editor(

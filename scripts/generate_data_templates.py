@@ -1,7 +1,7 @@
 """Generate template CSV / XLSX data files for WTK Test Planner.
 
 Writes per-account folders under data/<ACCOUNT>/:
-  - test_plan_info.csv
+  - test_plan_info_detail.csv  (core fields + PROFILE_* weight bands)
   - location_info.csv
   - convert_table.csv   (32 case combos; Standard × … × systems 1–2)
   - test_item_sequence_all_cases.xlsx  (48 sheets: Case_01 … Case_48)
@@ -130,9 +130,20 @@ def write_account_data(account: str) -> dict[str, Path]:
             "Lab_Rate",
         ],
     )
-    path = base / "test_plan_info.csv"
+    for col in (
+        "PROFILE_S40LBS",
+        "PROFILE_S75LBS",
+        "PROFILE_S200LBS",
+        "PROFILE_L200LBS",
+    ):
+        plan[col] = ""
+    path = base / "test_plan_info_detail.csv"
     plan.to_csv(path, index=False)
-    written["test_plan_info"] = path
+    written["test_plan_info_detail"] = path
+    # Remove obsolete split catalog if present
+    obsolete_info = base / "test_plan_info.csv"
+    if obsolete_info.exists():
+        obsolete_info.unlink()
 
     loc = pd.DataFrame(LOCATION_ROWS, columns=["Test_ID", "Location"])
     path = base / "location_info.csv"
@@ -163,7 +174,7 @@ def write_account_data(account: str) -> dict[str, Path]:
         "Column A = system label (rename freely, e.g. DUT-A / Chamber-1). "
         "One token per cell under columns 1, 2, 3, … (add more numbered columns if needed). "
         "Integer = blank fillable days after ETA; Test_ID = run that item "
-        "(duration from test_plan_info.csv). "
+        "(duration from test_plan_info_detail.csv). "
         "Example: 1 | T003 | T004 | T006 | 5 | T010 → blank 1 day, then T003, T004, T006, "
         "blank 5 days, then T010."
     )

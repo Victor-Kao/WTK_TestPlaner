@@ -18,39 +18,14 @@ from modules.config import (
     account_paths,
 )
 
-
-@st.cache_data(show_spinner=False)
-def load_test_plan_info(account: str) -> pd.DataFrame:
-    path = account_paths(account)["test_plan_info"]
-    df = pd.read_csv(path)
-    required = [
-        "Test_ID",
-        "Testplan_Item",
-        "Duration_Days",
-        "Duration_for_NRE",
-        "Abbrv_Name",
-        "Lab_Rate",
-    ]
-    # Migrate older CSVs that stored a flat Lab_Fee instead of rate × hours
-    if "Lab_Rate" not in df.columns and "Lab_Fee" in df.columns:
-        days = df["Duration_Days"].astype(int).clip(lower=1)
-        if "Duration_for_NRE" not in df.columns:
-            df["Duration_for_NRE"] = days * 8
-        hours = pd.to_numeric(df["Duration_for_NRE"], errors="coerce").fillna(1).clip(lower=1)
-        old_fee = pd.to_numeric(df["Lab_Fee"], errors="coerce").fillna(0)
-        df["Lab_Rate"] = (old_fee / hours).round(2)
-        df = df.drop(columns=["Lab_Fee"])
-    if "Duration_for_NRE" not in df.columns:
-        df["Duration_for_NRE"] = df["Duration_Days"].astype(int).clip(lower=1) * 8
-    missing = [c for c in required if c not in df.columns]
-    if missing:
-        raise ValueError(f"{path.name} missing columns: {missing}")
-    df["Test_ID"] = df["Test_ID"].astype(str).str.strip()
-    df["Duration_Days"] = df["Duration_Days"].astype(int)
-    df["Duration_for_NRE"] = pd.to_numeric(df["Duration_for_NRE"], errors="coerce").fillna(0)
-    df["Lab_Rate"] = pd.to_numeric(df["Lab_Rate"], errors="coerce").fillna(0)
-    return df
-
+TEST_PLAN_CORE_COLUMNS = (
+    "Test_ID",
+    "Testplan_Item",
+    "Duration_Days",
+    "Duration_for_NRE",
+    "Abbrv_Name",
+    "Lab_Rate",
+)
 
 PROFILE_COLUMNS = (
     "PROFILE_S40LBS",
@@ -58,6 +33,80 @@ PROFILE_COLUMNS = (
     "PROFILE_S200LBS",
     "PROFILE_L200LBS",
 )
+
+
+def _test_plan_catalog_path(account: str):
+    """Single source: test_plan_info_detail.csv (legacy test_plan_info.csv as fallback)."""
+    paths = account_paths(account)
+    detail = paths["test_plan_info_detail"]
+    if detail.exists():
+        return detail
+    legacy = paths["test_plan_info"]
+    if legacy.exists():
+        return legacy
+    return detail
+
+
+def _normalize_test_plan_catalog(df: pd.DataFrame, *, source_name: str) -> pd.DataFrame:
+    """Normalize core + optional PROFILE_* columns from the catalog CSV."""
+    df = df.loc[:, ~df.columns.astype(str).str.match(r"^Unnamed")].copy()
+
+    # Migrate older CSVs that stored a flat Lab_Fee instead of rate × hours
+    if "Lab_Rate" not in df.columns and "Lab_Fee" in df.columns:
+        days = df["Duration_Days"].astype(int).clip(lower=1)
+        if "Duration_for_NRE" not in df.columns:
+            df["Duration_for_NRE"] = days * 8
+        hours = (
+            pd.to_numeric(df["Duration_for_NRE"], errors="coerce")
+            .fillna(1)
+            .clip(lower=1)
+        )
+        old_fee = pd.to_numeric(df["Lab_Fee"], errors="coerce").fillna(0)
+        df["Lab_Rate"] = (old_fee / hours).round(2)
+        df = df.drop(columns=["Lab_Fee"])
+    if "Duration_for_NRE" not in df.columns:
+        df["Duration_for_NRE"] = df["Duration_Days"].astype(int).clip(lower=1) * 8
+
+    missing = [c for c in TEST_PLAN_CORE_COLUMNS if c not in df.columns]
+    if missing:
+        raise ValueError(f"{source_name} missing columns: {missing}")
+
+    df["Test_ID"] = df["Test_ID"].astype(str).str.strip()
+    df["Duration_Days"] = pd.to_numeric(df["Duration_Days"], errors="coerce").fillna(0).astype(int)
+    df["Duration_for_NRE"] = pd.to_numeric(df["Duration_for_NRE"], errors="coerce").fillna(0)
+    df["Lab_Rate"] = pd.to_numeric(df["Lab_Rate"], errors="coerce").fillna(0)
+    df["Testplan_Item"] = df["Testplan_Item"].fillna("").astype(str)
+    df["Abbrv_Name"] = df["Abbrv_Name"].fillna("").astype(str)
+
+    for col in PROFILE_COLUMNS:
+        if col not in df.columns:
+            df[col] = ""
+        else:
+            df[col] = df[col].fillna("").astype(str).str.strip()
+            df.loc[df[col].str.lower().isin(("nan", "none")), col] = ""
+
+    # Stable column order: core then profiles, then any extras
+    ordered = list(TEST_PLAN_CORE_COLUMNS) + list(PROFILE_COLUMNS)
+    extras = [c for c in df.columns if c not in ordered]
+    return df[ordered + extras]
+
+
+@st.cache_data(show_spinner=False)
+def load_test_plan_info(account: str) -> pd.DataFrame:
+    """
+    Load the test-plan catalog for timeline / NRE.
+
+    Source of truth: data/<account>/test_plan_info_detail.csv
+    (falls back to legacy test_plan_info.csv if detail is missing).
+    """
+    path = _test_plan_catalog_path(account)
+    if not path.exists():
+        raise FileNotFoundError(
+            f"No test plan catalog for {account}: expected "
+            f"{account_paths(account)['test_plan_info_detail']}"
+        )
+    df = pd.read_csv(path)
+    return _normalize_test_plan_catalog(df, source_name=path.name)
 
 
 def profile_column_for_weight(weight_kg: float) -> str:
@@ -80,23 +129,8 @@ def profile_column_for_weight(weight_kg: float) -> str:
 
 @st.cache_data(show_spinner=False)
 def load_test_plan_info_detail(account: str) -> pd.DataFrame:
-    """Load weight-profile detail text per Test_ID (optional file)."""
-    path = account_paths(account)["test_plan_info_detail"]
-    if not path.exists():
-        return pd.DataFrame(columns=["Test_ID", *PROFILE_COLUMNS])
-    df = pd.read_csv(path)
-    # Drop trailing unnamed empty columns from Excel exports
-    df = df.loc[:, ~df.columns.astype(str).str.match(r"^Unnamed")]
-    if "Test_ID" not in df.columns:
-        raise ValueError(f"{path.name} missing Test_ID column")
-    df["Test_ID"] = df["Test_ID"].astype(str).str.strip()
-    for col in PROFILE_COLUMNS:
-        if col not in df.columns:
-            df[col] = ""
-        else:
-            df[col] = df[col].fillna("").astype(str).str.strip()
-            df.loc[df[col].str.lower().isin(("nan", "none")), col] = ""
-    return df
+    """Same catalog as load_test_plan_info (includes PROFILE_* columns)."""
+    return load_test_plan_info(account)
 
 
 def test_detail_by_id(
