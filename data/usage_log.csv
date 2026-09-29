@@ -3,3 +3,6 @@ TEST PLAN,ROSA,hdhd,C0,25.0,2026-10-02,2026-10-16,3,Non-functional,2026-09-25T02
 NRE,,,,,,,,Concept:Functional,2026-09-25T10:29:55
 NRE,,,,,,,,"Concept:Non-functional, BCT:Functional",2026-09-26T11:20:11
 NRE,,,,,,,,Concept:Functional,2026-09-26T11:25:37
+TEST PLAN,ROSA,S,C0,25.0,2026-10-06,2026-10-20,2,Functional,2026-09-29T14:12:15
+TEST PLAN,ROSA,gg,C0,100.0,2026-10-06,2026-10-20,3,Non-functional,2026-09-29T14:58:04
+NRE,ROSA,gg,C0,100.0,2026-10-06,2026-10-20,3,"Concept:Non-functional, BCT:Functional, NOT:Functional",2026-09-29T15:03:53
