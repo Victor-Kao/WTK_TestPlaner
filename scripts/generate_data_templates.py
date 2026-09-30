@@ -104,15 +104,6 @@ def all_case_combinations() -> list[dict]:
     return rows
 
 
-def _style_header(ws) -> None:
-    fill = PatternFill("solid", fgColor="1F4E79")
-    font = Font(color="FFFFFF", bold=True)
-    for cell in ws[1]:
-        cell.fill = fill
-        cell.font = font
-        cell.alignment = Alignment(horizontal="center", wrap_text=True)
-
-
 def write_account_data(account: str) -> dict[str, Path]:
     """Write all catalog / sequence files into data/<account>/."""
     base = DATA / account
@@ -218,53 +209,13 @@ def write_account_data(account: str) -> dict[str, Path]:
     return written
 
 
-def write_nre_template() -> Path:
-    """Blank NRE export template matching expected columns."""
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "NRE_Estimate"
-    headers = [
-        "Test_ID",
-        "Test_Item",
-        "Location",
-        "Duration_for_NRE",
-        "Lab_Rate",
-        "Lab_Fee",
-        "Qty",
-        "Total_Fee",
-        "Phase",
-        "Functionality",
-        "Gold_Rail_Selection",
-        "Only_ORv3_MGX_Mini_Rack_wo_L11_Rack",
-        "Final_Fee",
-    ]
-    ws.append(headers)
-    _style_header(ws)
-    for col in ws.columns:
-        ws.column_dimensions[col[0].column_letter].width = 18
-
-    summary = wb.create_sheet("Summary")
-    summary.append(["Account", ""])
-    summary.append(["System_Weight_kg", ""])
-    summary.append(["Selected_Phases", ""])
-    summary.append(["Gold_Rail_Selection", ""])
-    summary.append(["Only_ORv3_MGX_Mini_Rack_wo_L11_Rack", ""])
-    summary.append(["Grand_Total_Fee", ""])
-
-    path = ROOT / "templates" / "nre_template.xlsx"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    wb.save(path)
-    return path
-
-
 def main() -> None:
     DATA.mkdir(parents=True, exist_ok=True)
     for account in ACCOUNTS:
         print(f"=== {account} ===")
         for name, path in write_account_data(account).items():
             print(f"  {name}: {path}")
-    print("Writing NRE template ...", write_nre_template())
-    print("Done.")
+    print("Done. (NRE templates live under data/<account>/NRE_TEMPLATE_<account>.xlsx)")
 
 
 if __name__ == "__main__":

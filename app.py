@@ -53,12 +53,15 @@ from modules.nre import (
 )
 from modules.timeline import (
     apply_sequence_template,
+    clear_all_test_items,
     clear_cell_span,
+    ensure_event_state,
     init_timeline_state,
     place_item,
     refresh_durations_from_catalog,
     rename_system_row,
-    set_calendar_empty_mark,
+    set_calendar_event,
+    set_event_detail,
     shift_system_from_date,
     shift_system_schedule,
     style_timeline_display,
@@ -639,10 +642,15 @@ else:
             else:
                 st.subheader("2. Timeline")
                 st.caption(
-                    "Top table = Weekday / Event (choose Empty in Event). "
-                    "Empty days stay white and cannot be filled. "
-                    "Multi-day items keep their start day and skip Empty/weekend "
-                    "(e.g. 09/30–10/02 with Empty on 10/01 → 09/30, 10/02, 10/05); "
+                    "Top table = Weekday / Event / Detail. "
+                    "Event: **-** (none), **Occupied** (unfillable day), "
+                    "**Critical Event** (extra System ETA / Critical Feedback). "
+                    "Detail: type a comment, or for Critical Event pick "
+                    "**System ETA** / **Critical Feedback** from the list, "
+                    "or choose **Custom (type…)** to enter free text. "
+                    "Occupied days stay white and cannot be filled. "
+                    "Multi-day items keep their start day and skip Occupied/weekend "
+                    "(e.g. 09/30–10/02 with Occupied on 10/01 → 09/30, 10/02, 10/05); "
                     "blank days before the start stay blank. "
                     "Weekend / Holiday columns are light red. "
                     "Edit the first **Row** cell to rename a system (e.g. DUT-A). "
@@ -665,7 +673,7 @@ else:
                     st.success(st.session_state.refresh_msg)
                     st.session_state.refresh_msg = None
 
-                ref_col, _ = st.columns([1, 3])
+                ref_col, clear_col, _ = st.columns([1, 1, 2])
                 with ref_col:
                     if st.button(
                         "Refresh durations from loaded data",
@@ -694,7 +702,29 @@ else:
                                 "Durations refreshed from loaded data. Sequence unchanged."
                             )
                         st.rerun()
+                with clear_col:
+                    if st.button(
+                        "Clear all test items",
+                        use_container_width=True,
+                        help=(
+                            "Remove every placed test item from all system rows. "
+                            "Keeps dates, Occupied / Critical Event marks, and system names."
+                        ),
+                    ):
+                        st.session_state.timeline = clear_all_test_items(
+                            st.session_state.timeline
+                        )
+                        st.session_state.export_df = None
+                        st.session_state.editor_error = None
+                        st.session_state.editor_version = (
+                            int(st.session_state.editor_version) + 1
+                        )
+                        st.session_state.refresh_msg = (
+                            "All test items cleared. Occupied / Critical Event marks kept."
+                        )
+                        st.rerun()
 
+                ensure_event_state(timeline)
                 detail_map = test_detail_by_id(st.session_state.work_test_plan)
                 event = render_synced_calendar(
                     timeline,
@@ -747,11 +777,16 @@ else:
                         new_tl, shift_errs = shift_system_from_date(timeline, sk, d, delta)
                         if shift_errs:
                             err_msg = "; ".join(shift_errs)
-                    elif kind == "mark_empty":
+                    elif kind == "mark_event" or kind == "mark_empty":
                         d = str(event.get("date", ""))
                         after = "" if event.get("value") is None else str(event.get("value"))
-                        enabled = after == EMPTY_LABEL or after.lower() == "empty"
-                        new_tl, shift_errs = set_calendar_empty_mark(timeline, d, enabled)
+                        new_tl, shift_errs = set_calendar_event(timeline, d, after)
+                        if shift_errs:
+                            err_msg = "; ".join(shift_errs)
+                    elif kind == "event_detail":
+                        d = str(event.get("date", ""))
+                        after = "" if event.get("value") is None else str(event.get("value"))
+                        new_tl, shift_errs = set_event_detail(timeline, d, after)
                         if shift_errs:
                             err_msg = "; ".join(shift_errs)
                     else:
@@ -768,7 +803,7 @@ else:
                         elif not d:
                             err_msg = "Missing date for cell edit."
                         elif d in set(timeline.get("blocked", [])):
-                            err_msg = f"{d} is Weekend/Holiday/Empty and cannot be filled."
+                            err_msg = f"{d} is Weekend/Holiday/Occupied and cannot be filled."
                         elif sk not in timeline.get("grid", {}):
                             err_msg = f"Unknown system row: {sk}"
                         else:

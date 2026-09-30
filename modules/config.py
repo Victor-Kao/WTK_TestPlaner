@@ -4,7 +4,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = ROOT / "data"
-TEMPLATES_DIR = ROOT / "templates"
 
 ACCOUNTS = ["ROSA", "NAOMI"]
 PHASES = ["Concept", "BCT", "NOT"]  # NRE testing phases
@@ -21,13 +20,20 @@ ORV3_MGX_WO_L11_COL = "Only_ORv3_MGX_Mini_Rack_wo_L11_Rack"
 ORV3_MGX_WO_L11_LABEL = "Only ORv3 / MGX Mini Rack w.o L11 Rack"
 
 EMPTY_TOKEN = "EMPTY"
-EMPTY_LABEL = "Empty"
+EMPTY_LABEL = "Empty"  # legacy cell token; calendar Event uses Occupied instead
+
+# Calendar Event row (replaces Empty toggle)
+EVENT_NONE = "-"
+EVENT_OCCUPIED = "Occupied"
+EVENT_CRITICAL = "Critical Event"
+EVENT_OPTS = (EVENT_NONE, EVENT_OCCUPIED, EVENT_CRITICAL)
+EVENT_DETAIL_ETA = "System ETA"
+EVENT_DETAIL_CF = "Critical Feedback"
+EVENT_DETAIL_CRITICAL_OPTS = (EVENT_DETAIL_ETA, EVENT_DETAIL_CF)
 
 # Cell-dropdown actions: shift schedule from the selected date onward
 CELL_AHEAD_OPT = "◀ Ahead (−1) from here"
 CELL_POSTPONE_OPT = "Postpone (+1) from here ▶"
-
-NRE_TEMPLATE_XLSX = TEMPLATES_DIR / "nre_template.xlsx"
 
 # NRE extras shown under the test-item selector (not in the multiselect list)
 NRE_OM_ID = "REL0164_OM"
@@ -87,6 +93,5 @@ def account_paths(account: str) -> dict[str, Path]:
 
 
 def nre_template_path(account: str) -> Path:
-    """Account NRE workbook template (falls back to templates/nre_template.xlsx)."""
-    path = account_paths(account)["nre_template"]
-    return path if path.exists() else NRE_TEMPLATE_XLSX
+    """Per-account NRE workbook: data/<account>/NRE_TEMPLATE_<account>.xlsx."""
+    return account_paths(account)["nre_template"]

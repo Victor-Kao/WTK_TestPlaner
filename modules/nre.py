@@ -14,7 +14,6 @@ from modules.config import (
     NRE_DNP_ID,
     NRE_MULTIPLIERS,
     NRE_OM_ID,
-    NRE_TEMPLATE_XLSX,
     NRE_UFIT_ID,
     ORV3_MGX_WO_L11_COL,
     PHASES,
@@ -382,13 +381,16 @@ def export_nre_xlsx(
     (SV0* IDs appended as "name (ID)"; AUX / ENG / REL show name only.)
     """
     account = str(meta.get("account") or "")
-    template = template_path or (
-        nre_template_path(account) if account else NRE_TEMPLATE_XLSX
-    )
+    if template_path is not None:
+        template = template_path
+    elif account:
+        template = nre_template_path(account)
+    else:
+        template = None
     pivoted = pivot_nre_for_template(nre_df)
     buf = BytesIO()
 
-    if template.exists():
+    if template is not None and template.exists():
         wb = load_workbook(template)
         ws = wb.active
         data_start = 2

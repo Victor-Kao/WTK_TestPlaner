@@ -159,12 +159,13 @@
     .event-milestone.blocked {
       background: #fff59d !important;
     }
-    .event-milestone select.mark-empty-select {
+    .event-milestone select.mark-event-select,
+    .event-milestone input.event-detail-input {
       background: #fff9c4 !important;
       border-color: #f0e68c;
     }
     select.cell-select,
-    select.mark-empty-select {
+    select.mark-event-select {
       width: 100%;
       max-width: calc(var(--date-w) - 10px);
       height: 28px;
@@ -172,6 +173,50 @@
       border-radius: 4px;
       background: #fff;
       font-size: 12px;
+    }
+    input.event-detail-input {
+      width: 100%;
+      max-width: calc(var(--date-w) - 10px);
+      height: 28px;
+      border: 1px solid #b0b7c3;
+      border-radius: 4px;
+      background: #fff;
+      font-size: 11px;
+      padding: 2px 4px;
+      text-align: center;
+    }
+    input.event-detail-input:focus {
+      outline: none;
+      border-color: #90a4ae;
+    }
+    .detail-crit-wrap {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      align-items: stretch;
+      width: 100%;
+    }
+    select.event-detail-crit-select {
+      width: 100%;
+      max-width: calc(var(--date-w) - 10px);
+      height: 26px;
+      border: 1px solid #b0b7c3;
+      border-radius: 4px;
+      background: #fff;
+      font-size: 11px;
+    }
+    .event-milestone select.event-detail-crit-select {
+      background: #fff9c4 !important;
+      border-color: #f0e68c;
+    }
+    .detail-crit-wrap input.event-detail-input {
+      height: 24px;
+    }
+    td.date-col.detail-crit-cell {
+      height: auto;
+      min-height: var(--row-h);
+      padding-top: 3px;
+      padding-bottom: 3px;
     }
     .marked-cell {
       font-size: 11px;
@@ -204,7 +249,8 @@
     td.profile-note.blocked:hover {
       background: #ef9a9a !important;
     }
-    td.label-col.profile-label {
+    td.label-col.profile-label,
+    td.label-col.detail-label {
       font-weight: 500;
       font-size: 11px;
       color: #64748b;
@@ -350,13 +396,15 @@
     let lastStructureKey = null;
     let scrollX = 0;
 
-    function structureKey(dates, systems, blocked, emptyMarks, calendarBlocked, options) {
+    function structureKey(dates, systems, blocked, emptyMarks, calendarBlocked, options, events, details) {
       return JSON.stringify({
         dates,
         blocked,
         emptyMarks,
         calendarBlocked,
         options,
+        events,
+        details,
         systems: (systems || []).map((s) => ({
           name: s.name,
           notes: s.notes || {},
@@ -375,24 +423,43 @@
       });
     }
 
-    function cleanAutoMark(markText) {
-      return String(markText || "")
-        .replace(/\s*\|\s*Empty\b/g, "")
-        .replace(/^Empty$/, "")
-        .trim();
+    function isMilestoneEvent(eventVal, detailVal, markText) {
+      // Yellow only while Event is Critical Event (not forced by setup dates)
+      return eventVal === "Critical Event";
     }
 
-    function patchValues(root, systems, emptyMarks, marks, dates) {
-      const emptySet = new Set(emptyMarks || []);
-      root.querySelectorAll("select.mark-empty-select").forEach((sel) => {
+    function patchValues(root, systems, events, details, marks, dates) {
+      const eta = "System ETA";
+      const cf = "Critical Feedback";
+      root.querySelectorAll("select.mark-event-select").forEach((sel) => {
         const d = sel.getAttribute("data-date");
         const idx = dates.indexOf(d);
-        const auto = cleanAutoMark(idx >= 0 ? marks[idx] : "");
-        const want = emptySet.has(d) ? "Empty" : "";
-        if (sel.options.length >= 1) {
-          sel.options[0].text = auto || "—";
-        }
+        const want = (idx >= 0 && events[idx]) ? events[idx] : "-";
         if (sel.value !== want) sel.value = want;
+      });
+      root.querySelectorAll("select.event-detail-crit-select").forEach((sel) => {
+        const d = sel.getAttribute("data-date");
+        const idx = dates.indexOf(d);
+        const det = (idx >= 0 && details[idx] != null) ? String(details[idx]) : "";
+        const want = (det === eta || det === cf) ? det : "__custom__";
+        if (sel.value !== want) sel.value = want;
+        const wrap = sel.closest(".detail-crit-wrap");
+        const inp = wrap ? wrap.querySelector("input.event-detail-input") : null;
+        if (inp) {
+          const showCustom = want === "__custom__";
+          inp.style.display = showCustom ? "block" : "none";
+          if (document.activeElement !== inp) {
+            inp.value = showCustom ? det : "";
+          }
+        }
+      });
+      root.querySelectorAll("input.event-detail-input:not([data-crit-custom])").forEach((inp) => {
+        const d = inp.getAttribute("data-date");
+        const idx = dates.indexOf(d);
+        const want = (idx >= 0 && details[idx] != null) ? String(details[idx]) : "-";
+        if (document.activeElement !== inp && inp.value !== want) {
+          inp.value = want;
+        }
       });
       (systems || []).forEach((sys) => {
         const cells = sys.cells || {};
@@ -415,6 +482,15 @@
       });
     }
 
+    function emitEventDetail(dateIso, value) {
+      setComponentValue({
+        kind: "event_detail",
+        date: dateIso,
+        value: value,
+        nonce: Date.now(),
+      });
+    }
+
     function bindSelects(root, shiftAheadOpt, shiftPostponeOpt) {
       root.querySelectorAll("select.cell-select").forEach((sel) => {
         if (sel.dataset.bound === "1") return;
@@ -433,7 +509,6 @@
               delta: v === shiftAheadOpt ? -1 : 1,
               nonce: Date.now(),
             });
-            // Keep showing the cell's real value (do not stick on Ahead/Postpone)
             sel.value = sel.dataset.prevValue || "";
             return;
           }
@@ -447,17 +522,56 @@
           });
         });
       });
-      root.querySelectorAll("select.mark-empty-select").forEach((sel) => {
+      root.querySelectorAll("select.mark-event-select").forEach((sel) => {
         if (sel.dataset.bound === "1") return;
         sel.dataset.bound = "1";
         sel.addEventListener("change", () => {
           setComponentValue({
-            kind: "mark_empty",
+            kind: "mark_event",
             date: sel.getAttribute("data-date"),
             value: sel.value,
             nonce: Date.now(),
           });
         });
+      });
+      root.querySelectorAll("select.event-detail-crit-select").forEach((sel) => {
+        if (sel.dataset.bound === "1") return;
+        sel.dataset.bound = "1";
+        sel.addEventListener("change", () => {
+          const d = sel.getAttribute("data-date");
+          const wrap = sel.closest(".detail-crit-wrap");
+          const inp = wrap ? wrap.querySelector("input.event-detail-input") : null;
+          if (sel.value === "__custom__") {
+            if (inp) {
+              inp.style.display = "block";
+              inp.focus();
+              emitEventDetail(d, inp.value || "");
+            } else {
+              emitEventDetail(d, "");
+            }
+          } else {
+            if (inp) {
+              inp.style.display = "none";
+              inp.value = "";
+            }
+            emitEventDetail(d, sel.value);
+          }
+        });
+      });
+      root.querySelectorAll("input.event-detail-input").forEach((inp) => {
+        if (inp.dataset.bound === "1") return;
+        inp.dataset.bound = "1";
+        const commit = () => {
+          emitEventDetail(inp.getAttribute("data-date"), inp.value);
+        };
+        inp.addEventListener("keydown", (e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            inp.blur();
+          }
+        });
+        inp.addEventListener("change", commit);
+        inp.addEventListener("blur", commit);
       });
       root.querySelectorAll("button.sys-shift").forEach((btn) => {
         if (btn.dataset.bound === "1") return;
@@ -554,14 +668,13 @@
       }
     }
 
-    function isMilestoneMark(markText) {
-      const t = String(markText || "");
-      return t.includes("System ETA") || t.includes("Critical Feedback");
-    }
-
-    function buildHtml(dates, weekdays, marks, calBlockedSet, emptySet, systems, options) {
-      const redSet = calBlockedSet; // only Weekend / Holiday are light red
+    function buildHtml(
+      dates, weekdays, marks, calBlockedSet, emptySet, systems, options,
+      events, details, eventOpts, detailCriticalOpts
+    ) {
+      const redSet = calBlockedSet;
       let html = "";
+
       html += `<div class="table-block">`;
       html += `<div class="block-title">Calendar marks</div>`;
       html += `<div class="h-scroll"><table class="cal">`;
@@ -575,21 +688,55 @@
       });
       html += `</tr>`;
 
-      // Event row includes Empty option (merged)
+      // Event row: - / Occupied / Critical Event
       html += `<tr><td class="label-col">Event</td>`;
       dates.forEach((d, i) => {
-        const milestone = isMilestoneMark(marks[i]);
+        const ev = (events && events[i]) || "-";
+        const det = (details && details[i]) || "";
+        const milestone = isMilestoneEvent(ev, det, marks[i]);
         const milCls = milestone ? " event-milestone" : "";
         if (calBlockedSet.has(d)) {
-          html += `<td class="date-col blocked${milCls}"><div class="marked-cell">${esc(marks[i] || "")}</div></td>`;
+          const label = String(marks[i] || "")
+            .split(" | ")
+            .filter((t) => t === "Weekend" || t === "Holiday")
+            .join(" | ") || (marks[i] || "");
+          html += `<td class="date-col blocked${milCls}"><div class="marked-cell">${esc(label)}</div></td>`;
         } else {
-          const isEmpty = emptySet.has(d);
-          const auto = cleanAutoMark(marks[i]);
-          const label0 = auto || "—";
-          html += `<td class="date-col${milCls}"><select class="mark-empty-select" data-date="${esc(d)}">`;
-          html += `<option value=""${isEmpty ? "" : " selected"}>${esc(label0)}</option>`;
-          html += `<option value="Empty"${isEmpty ? " selected" : ""}>Empty</option>`;
+          html += `<td class="date-col${milCls}"><select class="mark-event-select" data-date="${esc(d)}">`;
+          (eventOpts || ["-", "Occupied", "Critical Event"]).forEach((opt) => {
+            const selected = opt === ev ? " selected" : "";
+            html += `<option value="${esc(opt)}"${selected}>${esc(opt)}</option>`;
+          });
           html += `</select></td>`;
+        }
+      });
+      html += `</tr>`;
+
+      // Detail row under Event
+      html += `<tr><td class="label-col detail-label">Detail</td>`;
+      dates.forEach((d, i) => {
+        const ev = (events && events[i]) || "-";
+        const det = (details && details[i]) != null ? String(details[i]) : "-";
+        const milestone = isMilestoneEvent(ev, det, marks[i]);
+        const milCls = milestone ? " event-milestone" : "";
+        if (calBlockedSet.has(d)) {
+          html += `<td class="date-col blocked${milCls}"></td>`;
+        } else if (ev === "Critical Event") {
+          const presets = detailCriticalOpts || ["System ETA", "Critical Feedback"];
+          const isPreset = presets.indexOf(det) >= 0;
+          const selVal = isPreset ? det : "__custom__";
+          html += `<td class="date-col detail-crit-cell${milCls}"><div class="detail-crit-wrap">`;
+          html += `<select class="event-detail-crit-select" data-date="${esc(d)}" title="System ETA, Critical Feedback, or Custom">`;
+          presets.forEach((opt) => {
+            html += `<option value="${esc(opt)}"${opt === selVal ? " selected" : ""}>${esc(opt)}</option>`;
+          });
+          html += `<option value="__custom__"${selVal === "__custom__" ? " selected" : ""}>Custom (type…)</option>`;
+          html += `</select>`;
+          html += `<input class="event-detail-input" data-crit-custom="1" type="text" data-date="${esc(d)}" value="${esc(isPreset ? "" : det)}" placeholder="type custom…" title="${esc(det)}" style="display:${isPreset ? "none" : "block"}" />`;
+          html += `</div></td>`;
+        } else {
+          const ph = ev === "Occupied" ? "comment…" : "-";
+          html += `<td class="date-col${milCls}"><input class="event-detail-input" type="text" data-date="${esc(d)}" value="${esc(det)}" placeholder="${esc(ph)}" title="${esc(det)}" /></td>`;
         }
       });
       html += `</tr></tbody></table></div></div>`;
@@ -608,8 +755,8 @@
         html += `<tr><td class="label-col"><input class="sys-name-input" type="text" data-system="${esc(sys.name)}" value="${esc(sys.name)}" title="Rename system row" /></td>`;
         dates.forEach((d) => {
           const isRed = redSet.has(d);
-          const isEmpty = emptySet.has(d);
-          const locked = isRed || isEmpty;
+          const isOccupied = emptySet.has(d);
+          const locked = isRed || isOccupied;
           const cls = isRed ? "date-col blocked" : "date-col";
           const val = (sys.cells && sys.cells[d]) || "";
           if (locked) {
@@ -625,7 +772,6 @@
           }
         });
         html += `</tr>`;
-        // PROFILE note row under the schedule selectors
         html += `<tr><td class="label-col profile-label">Profile</td>`;
         dates.forEach((d) => {
           const isRed = redSet.has(d);
@@ -642,28 +788,35 @@
       const dates = args.dates || [];
       const weekdays = args.weekdays || [];
       const marks = args.marks || [];
+      const events = args.events || [];
+      const details = args.details || [];
       const blocked = args.blocked || [];
       const calendarBlocked = args.calendar_blocked || [];
       const emptyMarks = args.empty_marks || [];
       const systems = args.systems || [];
       const options = args.options || [""];
+      const eventOpts = args.event_opts || ["-", "Occupied", "Critical Event"];
+      const detailCriticalOpts = args.detail_critical_opts || ["System ETA", "Critical Feedback"];
       const shiftAheadOpt = args.shift_ahead_opt || "◀ Ahead (−1) from here";
       const shiftPostponeOpt = args.shift_postpone_opt || "Postpone (+1) from here ▶";
       const calBlockedSet = new Set(calendarBlocked);
       const emptySet = new Set(emptyMarks);
       const root = document.getElementById("root");
-      const sk = structureKey(dates, systems, blocked, emptyMarks, calendarBlocked, options);
+      const sk = structureKey(
+        dates, systems, blocked, emptyMarks, calendarBlocked, options, events, details
+      );
 
       if (sk === lastStructureKey && root.dataset.ready === "1") {
         saveScroll(root);
-        patchValues(root, systems, emptyMarks, marks, dates);
+        patchValues(root, systems, events, details, marks, dates);
         restoreScroll(root);
         return;
       }
 
       saveScroll(root);
       root.innerHTML = buildHtml(
-        dates, weekdays, marks, calBlockedSet, emptySet, systems, options
+        dates, weekdays, marks, calBlockedSet, emptySet, systems, options,
+        events, details, eventOpts, detailCriticalOpts
       );
       root.dataset.ready = "1";
       lastStructureKey = sk;
@@ -672,9 +825,9 @@
       restoreScroll(root);
 
       const nSys = systems.length;
-      // marks block + per system: title, header, schedule row, profile row
+      // marks: title + weekday + event + detail; per system: title, header, schedule, profile
       const height =
-        56 + 28 + (38 * 3 + 8) + nSys * (28 + 38 * 3 + 16) + Math.max(0, nSys) * 28 + 40;
+        56 + 28 + (38 * 4 + 8) + nSys * (28 + 38 * 3 + 16) + Math.max(0, nSys) * 28 + 40;
       setFrameHeight(height);
     }
   </script>

@@ -6,7 +6,15 @@ from typing import Any
 
 import pandas as pd
 
-from modules.config import EMPTY_LABEL, EMPTY_TOKEN
+from modules.config import (
+    EMPTY_LABEL,
+    EMPTY_TOKEN,
+    EVENT_CRITICAL,
+    EVENT_DETAIL_CF,
+    EVENT_DETAIL_ETA,
+    EVENT_NONE,
+    EVENT_OCCUPIED,
+)
 from modules.data_loader import (
     load_taiwan_holidays,
     profile_column_for_weight,
@@ -14,8 +22,12 @@ from modules.data_loader import (
     test_info_by_id,
 )
 
-BLOCKED_FILL = "#ffcdd2"  # light red for weekend / holiday columns
-EVENT_MILESTONE_FILL = "#fff9c4"  # light yellow for System ETA / Critical Feedback
+BLOCKED_FILL = "#ffcdd2"  # light red for weekend / holiday columns (on-screen)
+EVENT_MILESTONE_FILL = "#fff9c4"  # light yellow for System ETA / Critical Feedback (on-screen)
+# Excel export system-row alternating fills
+EXPORT_SYSTEM_FILL_A = "#D6EAF8"  # light blue (1st, 3rd, …)
+EXPORT_SYSTEM_FILL_B = "#E8E8E8"  # light gray (2nd, 4th, …)
+EXPORT_CELL_BORDER = "9E9E9E"  # left/right cell border
 
 
 def format_date_display(d: date | str) -> str:
@@ -151,21 +163,79 @@ def calendar_locked_dates(timeline: dict[str, Any]) -> set[str]:
     return blocked_date_set(timeline.get("markers", {}))
 
 
+def ensure_event_state(timeline: dict[str, Any]) -> None:
+    """
+    Ensure event_marks / event_details exist for every date.
+
+    Migrates legacy empty_marks → Occupied. Seeds primary System ETA /
+    Critical Feedback dates as Critical Event + matching detail.
+    """
+    dates = list(timeline.get("dates", []))
+    marks: dict[str, str] = dict(timeline.get("event_marks") or {})
+    details: dict[str, str] = dict(timeline.get("event_details") or {})
+    legacy_empty = set(timeline.get("empty_marks") or [])
+    had_event_state = "event_marks" in timeline
+
+    for d in dates:
+        if d not in marks:
+            marks[d] = EVENT_OCCUPIED if d in legacy_empty else EVENT_NONE
+        if d not in details:
+            if marks[d] == EVENT_OCCUPIED:
+                details[d] = ""
+            elif marks[d] == EVENT_CRITICAL:
+                details[d] = EVENT_DETAIL_ETA
+            else:
+                details[d] = EVENT_NONE
+
+    if not had_event_state:
+        eta = str(timeline.get("system_eta") or "")
+        cf = str(timeline.get("critical_feedback") or "")
+        if eta and eta in marks and marks[eta] != EVENT_OCCUPIED:
+            marks[eta] = EVENT_CRITICAL
+            details[eta] = EVENT_DETAIL_ETA
+        if cf and cf in marks and marks[cf] != EVENT_OCCUPIED:
+            marks[cf] = EVENT_CRITICAL
+            details[cf] = EVENT_DETAIL_CF
+
+    # Drop dates no longer on the timeline
+    marks = {d: marks[d] for d in dates}
+    details = {d: details.get(d, EVENT_NONE) for d in dates}
+    timeline["event_marks"] = marks
+    timeline["event_details"] = details
+
+
 def refresh_blocked(timeline: dict[str, Any]) -> None:
     """
-    blocked = Weekend/Holiday ∪ user Empty marks.
-    Also sync 'Empty' into markers for the Event display row.
+    blocked = Weekend/Holiday ∪ Occupied (event) days.
+    Sync Occupied → empty_marks (fill lock) and Critical Event details → markers.
+
+    Yellow milestone tags (System ETA / Critical Feedback) follow the Event row:
+    only when Event is Critical Event (not forced by setup dates alone).
     """
+    ensure_event_state(timeline)
     locked = calendar_locked_dates(timeline)
-    empty = set(timeline.get("empty_marks", []))
+    event_marks: dict[str, str] = timeline.get("event_marks") or {}
+    event_details: dict[str, str] = timeline.get("event_details") or {}
+    occupied = {d for d, ev in event_marks.items() if ev == EVENT_OCCUPIED}
+
     markers = timeline.setdefault("markers", {})
+    managed = {"Empty", "Occupied", EVENT_OCCUPIED, "System ETA", "Critical Feedback"}
     for d in timeline.get("dates", []):
-        tags = [t for t in markers.get(d, []) if t != "Empty"]
-        if d in empty:
-            tags.append("Empty")
+        # Keep Weekend / Holiday only; milestone tags come from Event + Detail
+        tags = [t for t in markers.get(d, []) if t not in managed]
+        ev = event_marks.get(d, EVENT_NONE)
+        det = str(event_details.get(d, "") or "").strip()
+        if ev == EVENT_OCCUPIED:
+            tags.append(EVENT_OCCUPIED)
+        elif ev == EVENT_CRITICAL:
+            if det == EVENT_DETAIL_ETA:
+                tags.append("System ETA")
+            elif det == EVENT_DETAIL_CF:
+                tags.append("Critical Feedback")
         markers[d] = tags
-    timeline["blocked"] = sorted(locked | empty)
-    timeline["empty_marks"] = sorted(empty)
+
+    timeline["blocked"] = sorted(locked | occupied)
+    timeline["empty_marks"] = sorted(occupied)  # Occupied days (legacy key for fill lock)
     timeline["calendar_blocked"] = sorted(locked)
 
 
@@ -189,15 +259,28 @@ def init_timeline_state(
         row_key = f"System {s}"
         grid[row_key] = {d.isoformat(): None for d in dates}
         system_order.append(row_key)
+    date_isos = [d.isoformat() for d in dates]
+    event_marks = {d: EVENT_NONE for d in date_isos}
+    event_details = {d: EVENT_NONE for d in date_isos}
+    eta_iso = system_eta.isoformat()
+    cf_iso = critical_feedback.isoformat()
+    if eta_iso in event_marks:
+        event_marks[eta_iso] = EVENT_CRITICAL
+        event_details[eta_iso] = EVENT_DETAIL_ETA
+    if cf_iso in event_marks:
+        event_marks[cf_iso] = EVENT_CRITICAL
+        event_details[cf_iso] = EVENT_DETAIL_CF
     tl = {
-        "dates": [d.isoformat() for d in dates],
+        "dates": date_isos,
         "markers": markers,
         "empty_marks": [],
+        "event_marks": event_marks,
+        "event_details": event_details,
         "grid": grid,
         "system_order": system_order,
         "n_systems": n_systems,
-        "system_eta": system_eta.isoformat(),
-        "critical_feedback": critical_feedback.isoformat(),
+        "system_eta": eta_iso,
+        "critical_feedback": cf_iso,
         "min_end": add_business_days(critical_feedback, 5, holidays).isoformat(),
     }
     refresh_blocked(tl)
@@ -290,7 +373,7 @@ def extend_timeline_to(timeline: dict[str, Any], new_end: date) -> dict[str, Any
     holidays = _holiday_map_for_span(start, new_end)
     all_dates = daterange(start, new_end)
     markers = build_markers(all_dates, system_eta, critical_feedback, holidays)
-    # Preserve Empty tags via empty_marks list
+    # Preserve Occupied / Critical Event via event_marks + event_details
     new_tl["dates"] = [d.isoformat() for d in all_dates]
     new_tl["markers"] = markers
     for row_key, row in new_tl["grid"].items():
@@ -298,6 +381,7 @@ def extend_timeline_to(timeline: dict[str, Any], new_end: date) -> dict[str, Any
             key = d.isoformat()
             if key not in row:
                 row[key] = None
+    ensure_event_state(new_tl)
     refresh_blocked(new_tl)
     return new_tl
 
@@ -867,35 +951,101 @@ def refresh_durations_from_catalog(
     return new_tl, errors
 
 
-def set_calendar_empty_mark(
+def set_calendar_event(
     timeline: dict[str, Any],
     day: str,
-    enabled: bool,
+    event_value: str,
 ) -> tuple[dict[str, Any], list[str]]:
     """
-    Toggle Empty on the Event row for a day.
-    When enabling Empty: that day cannot be filled; existing plans keep their
-    original start (never earlier) and skip Empty days while keeping duration.
+    Set Event row for a day: '-', 'Occupied', or 'Critical Event'.
+
+    Occupied blocks filling (same as legacy Empty) and postpones schedules.
+    Critical Event can mark extra System ETA / Critical Feedback via Detail.
     """
     new_tl = deepcopy(timeline)
+    ensure_event_state(new_tl)
     locked = calendar_locked_dates(new_tl)
     if day in locked:
         return timeline, [f"{day} is already Weekend/Holiday."]
     if day not in new_tl.get("dates", []):
         return timeline, [f"{day} is outside the timeline."]
 
-    empty = set(new_tl.get("empty_marks", []))
-    if enabled:
-        empty.add(day)
-    else:
-        empty.discard(day)
-    new_tl["empty_marks"] = sorted(empty)
+    value = str(event_value or "").strip() or EVENT_NONE
+    if value not in (EVENT_NONE, EVENT_OCCUPIED, EVENT_CRITICAL):
+        # Accept legacy "Empty" as Occupied
+        if value.lower() == "empty" or value == EMPTY_LABEL:
+            value = EVENT_OCCUPIED
+        else:
+            return timeline, [f"Unknown event value: {event_value}"]
+
+    marks = dict(new_tl.get("event_marks") or {})
+    details = dict(new_tl.get("event_details") or {})
+    prev = marks.get(day, EVENT_NONE)
+    marks[day] = value
+
+    if value == EVENT_NONE:
+        details[day] = EVENT_NONE if not str(details.get(day, "")).strip() else details.get(day, EVENT_NONE)
+        if details.get(day) in (EVENT_DETAIL_ETA, EVENT_DETAIL_CF) and prev == EVENT_CRITICAL:
+            details[day] = EVENT_NONE
+    elif value == EVENT_OCCUPIED:
+        if details.get(day) in (EVENT_NONE, EVENT_DETAIL_ETA, EVENT_DETAIL_CF, ""):
+            details[day] = ""
+    elif value == EVENT_CRITICAL:
+        if details.get(day) in (EVENT_NONE, "", None):
+            details[day] = EVENT_DETAIL_ETA
+
+    new_tl["event_marks"] = marks
+    new_tl["event_details"] = details
     refresh_blocked(new_tl)
 
-    if enabled:
+    if value == EVENT_OCCUPIED and prev != EVENT_OCCUPIED:
         new_tl, errors = postpone_system_schedules(new_tl)
         return new_tl, errors
     return new_tl, []
+
+
+def set_event_detail(
+    timeline: dict[str, Any],
+    day: str,
+    detail: str,
+) -> tuple[dict[str, Any], list[str]]:
+    """Set Detail row text for a day (comment or System ETA / Critical Feedback)."""
+    new_tl = deepcopy(timeline)
+    ensure_event_state(new_tl)
+    locked = calendar_locked_dates(new_tl)
+    if day in locked:
+        return timeline, [f"{day} is already Weekend/Holiday."]
+    if day not in new_tl.get("dates", []):
+        return timeline, [f"{day} is outside the timeline."]
+
+    text = "" if detail is None else str(detail)
+    details = dict(new_tl.get("event_details") or {})
+    marks = dict(new_tl.get("event_marks") or {})
+    ev = marks.get(day, EVENT_NONE)
+
+    # Typing System ETA / Critical Feedback while Event is '-' upgrades to Critical Event
+    stripped = text.strip()
+    if ev == EVENT_NONE and stripped in (EVENT_DETAIL_ETA, EVENT_DETAIL_CF):
+        marks[day] = EVENT_CRITICAL
+        new_tl["event_marks"] = marks
+
+    details[day] = stripped if stripped else (
+        EVENT_NONE if marks.get(day, EVENT_NONE) == EVENT_NONE else ""
+    )
+    new_tl["event_details"] = details
+    refresh_blocked(new_tl)
+    return new_tl, []
+
+
+def set_calendar_empty_mark(
+    timeline: dict[str, Any],
+    day: str,
+    enabled: bool,
+) -> tuple[dict[str, Any], list[str]]:
+    """Legacy wrapper: Empty → Occupied event."""
+    return set_calendar_event(
+        timeline, day, EVENT_OCCUPIED if enabled else EVENT_NONE
+    )
 
 
 def clear_cell_span(timeline: dict[str, Any], row_key: str, date_iso: str) -> dict[str, Any]:
@@ -920,6 +1070,23 @@ def clear_cell_span(timeline: dict[str, Any], row_key: str, date_iso: str) -> di
     for offset in range(duration):
         d = dates[start_idx + offset]
         new_tl["grid"][row_key][d] = None
+    return new_tl
+
+
+def clear_all_test_items(timeline: dict[str, Any]) -> dict[str, Any]:
+    """
+    Remove every placed test item from all system rows.
+    Keeps calendar dates, Empty day marks, and system row names.
+    """
+    new_tl = deepcopy(timeline)
+    for row in new_tl.get("grid", {}).values():
+        for d, cell in list(row.items()):
+            if not cell:
+                continue
+            if cell.get("is_empty"):
+                continue
+            row[d] = None
+    refresh_blocked(new_tl)
     return new_tl
 
 
@@ -1007,6 +1174,15 @@ def timeline_editor_df(timeline: dict[str, Any]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def _combined_event_label(event: str, detail: str) -> str:
+    """Single Event-cell text: event type plus detail when present."""
+    ev = str(event or EVENT_NONE).strip() or EVENT_NONE
+    det = str(detail or "").strip()
+    if det in ("", EVENT_NONE) or det == ev:
+        return ev
+    return f"{ev}: {det}"
+
+
 def timeline_to_export_df(
     timeline: dict[str, Any],
     *,
@@ -1014,35 +1190,41 @@ def timeline_to_export_df(
     detail_by_id: dict[str, dict[str, str]] | None = None,
 ) -> pd.DataFrame:
     """
-    Export layout:
-      Row 0: Date
-      Row 1: Event
+    Export layout (first column labeled Date):
+      Row 0: Event  (event type + detail merged, e.g. "Critical Event: System ETA")
       Then for each system:
         - schedule row (test items)
         - profile row under it (weight-band notes; blank if none)
-      First-column label is the system name on the schedule row and blank on the
-      profile row so Excel can vertically merge them into one cell.
     """
+    ensure_event_state(timeline)
     dates = timeline["dates"]
     markers = timeline["markers"]
     grid = timeline["grid"]
+    event_marks = timeline.get("event_marks") or {}
+    event_details = timeline.get("event_details") or {}
+    cal_blocked = set(timeline.get("calendar_blocked") or [])
 
     profile_col = None
     if weight_kg is not None and detail_by_id is not None:
         profile_col = profile_column_for_weight(float(weight_kg))
 
     rows: list[dict[str, str]] = []
-    date_row = {"Row": "Date"}
-    mark_row = {"Row": "Event"}
+    mark_row = {"Date": "Event"}
     for d in dates:
-        date_row[d] = format_date_display(d)
-        mark_row[d] = " | ".join(markers.get(d, []))
-    rows.append(date_row)
+        if d in cal_blocked:
+            mark_row[d] = " | ".join(
+                t for t in markers.get(d, []) if t in ("Weekend", "Holiday")
+            ) or " | ".join(markers.get(d, []))
+        else:
+            mark_row[d] = _combined_event_label(
+                event_marks.get(d, EVENT_NONE),
+                event_details.get(d, ""),
+            )
     rows.append(mark_row)
 
     for row_key in sorted_system_keys(timeline):
-        schedule = {"Row": row_key}
-        profile = {"Row": ""}  # blank — merged with schedule label in Excel
+        schedule = {"Date": row_key}
+        profile = {"Date": ""}  # blank — merged with schedule label in Excel
         for d in dates:
             cell = grid[row_key].get(d)
             if not cell:
@@ -1069,22 +1251,37 @@ def timeline_to_export_df(
 
 def timeline_to_display_df(timeline: dict[str, Any]) -> pd.DataFrame:
     """Human-readable grid: dates as columns, marker + systems as rows."""
+    ensure_event_state(timeline)
     dates = timeline["dates"]
     markers = timeline["markers"]
     grid = timeline["grid"]
+    event_marks = timeline.get("event_marks") or {}
+    event_details = timeline.get("event_details") or {}
+    cal_blocked = set(timeline.get("calendar_blocked") or [])
 
     weekdays = []
     marks = []
     for d in dates:
         dt = date.fromisoformat(d)
         weekdays.append(dt.strftime("%a"))
-        marks.append(" | ".join(markers.get(d, [])))
+        if d in cal_blocked:
+            marks.append(
+                " | ".join(t for t in markers.get(d, []) if t in ("Weekend", "Holiday"))
+                or " | ".join(markers.get(d, []))
+            )
+        else:
+            marks.append(
+                _combined_event_label(
+                    event_marks.get(d, EVENT_NONE),
+                    event_details.get(d, ""),
+                )
+            )
     rows = [
-        {"Row": "Weekday", **{d: weekdays[i] for i, d in enumerate(dates)}},
-        {"Row": "Event", **{d: marks[i] for i, d in enumerate(dates)}},
+        {"Date": "Weekday", **{d: weekdays[i] for i, d in enumerate(dates)}},
+        {"Date": "Event", **{d: marks[i] for i, d in enumerate(dates)}},
     ]
     for row_key in sorted_system_keys(timeline):
-        row = {"Row": row_key}
+        row = {"Date": row_key}
         for d in dates:
             row[d] = display_label(grid[row_key].get(d))
         rows.append(row)
@@ -1092,27 +1289,98 @@ def timeline_to_display_df(timeline: dict[str, Any]) -> pd.DataFrame:
 
 
 def style_timeline_display(df: pd.DataFrame, timeline: dict[str, Any]):
-    """Light-red Weekend/Holiday columns; light-yellow System ETA / Critical Feedback on Event row."""
-    blocked = set(timeline.get("blocked", []))
+    """
+    Preview styling (matches Excel export):
+      - Weekend / Holiday columns → light red
+      - Event Critical Event → light yellow
+      - System blocks alternate light blue / light gray
+      - Left & right borders; top/bottom between Event and systems
+    """
+    ensure_event_state(timeline)
+    calendar_blocked = set(
+        timeline.get("calendar_blocked")
+        or [
+            d
+            for d, tags in timeline.get("markers", {}).items()
+            if "Weekend" in tags or "Holiday" in tags
+        ]
+    )
     markers = timeline.get("markers", {})
+    event_marks = timeline.get("event_marks") or {}
     milestone_dates = {
         d
         for d, tags in markers.items()
         if "System ETA" in tags or "Critical Feedback" in tags
+    } | {d for d, ev in event_marks.items() if ev == EVENT_CRITICAL}
+
+    system_keys = sorted_system_keys(timeline)
+    sys_color = {
+        name: (EXPORT_SYSTEM_FILL_A if i % 2 == 0 else EXPORT_SYSTEM_FILL_B)
+        for i, name in enumerate(system_keys)
     }
+    profile_owner: dict[int, str] = {}
+    labels = ["" if v is None else str(v) for v in df["Date"].tolist()]
+    last_sys = None
+    for i, label in enumerate(labels):
+        if label in system_keys:
+            last_sys = label
+            profile_owner[i] = label
+        elif label == "" and last_sys is not None:
+            profile_owner[i] = last_sys
+        else:
+            last_sys = None
+
+    # First / last row index of each system block (schedule + optional profile)
+    sys_block_bounds: dict[str, tuple[int, int]] = {}
+    for i, label in enumerate(labels):
+        if label in system_keys:
+            end = i
+            if i + 1 < len(labels) and labels[i + 1] == "":
+                end = i + 1
+            sys_block_bounds[label] = (i, end)
 
     def _row_style(row: pd.Series):
-        is_event = str(row.get("Row", "")) == "Event"
         styles: list[str] = []
+        label = str(row.get("Date", ""))
+        row_idx = row.name if isinstance(row.name, int) else None
+        owner = profile_owner.get(row_idx) if row_idx is not None else None
+        if owner is None and label in sys_color:
+            owner = label
+        sys_fill = sys_color.get(owner) if owner else None
+        is_event = label == "Event"
+
+        top = bottom = False
+        if is_event:
+            bottom = True
+        elif owner and row_idx is not None and owner in sys_block_bounds:
+            start_i, end_i = sys_block_bounds[owner]
+            top = row_idx == start_i
+            bottom = row_idx == end_i
+
+        border_parts = [
+            f"border-left: 1px solid #{EXPORT_CELL_BORDER}",
+            f"border-right: 1px solid #{EXPORT_CELL_BORDER}",
+        ]
+        if top:
+            border_parts.append(f"border-top: 2px solid #{EXPORT_CELL_BORDER}")
+        if bottom:
+            border_parts.append(f"border-bottom: 2px solid #{EXPORT_CELL_BORDER}")
+        border = "; ".join(border_parts)
+
         for col in row.index:
-            if col == "Row":
-                styles.append("")
-            elif col in blocked:
-                styles.append(f"background-color: {BLOCKED_FILL}")
+            bg = None
+            if col == "Date":
+                bg = sys_fill
+            elif col in calendar_blocked:
+                bg = BLOCKED_FILL
             elif is_event and col in milestone_dates:
-                styles.append(f"background-color: {EVENT_MILESTONE_FILL}")
+                bg = EVENT_MILESTONE_FILL
+            elif sys_fill:
+                bg = sys_fill
+            if bg:
+                styles.append(f"background-color: {bg}; {border}")
             else:
-                styles.append("")
+                styles.append(border)
         return styles
 
     return df.style.apply(_row_style, axis=1)
@@ -1120,24 +1388,35 @@ def style_timeline_display(df: pd.DataFrame, timeline: dict[str, Any]):
 
 def export_timeline_xlsx(df: pd.DataFrame, timeline: dict[str, Any]) -> bytes:
     """
-    Write export table to XLSX with the same fills as the on-screen table:
+    Write export table to XLSX (same colors as preview):
       - Weekend / Holiday columns → light red
-      - Event row System ETA / Critical Feedback → light yellow
+      - Event Critical Event → light yellow
+      - System blocks alternate light blue / light gray
+      - Left/right borders; top/bottom between Event and each system
       - System name + profile rows: first column vertically merged
-    CSV cannot store colors or merges; use this for colored downloads.
     """
     from io import BytesIO
 
     from openpyxl import Workbook
-    from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
-    blocked = set(timeline.get("blocked", []))
+    ensure_event_state(timeline)
+    calendar_blocked = set(
+        timeline.get("calendar_blocked")
+        or [
+            d
+            for d, tags in timeline.get("markers", {}).items()
+            if "Weekend" in tags or "Holiday" in tags
+        ]
+    )
     markers = timeline.get("markers", {})
+    event_marks = timeline.get("event_marks") or {}
     milestone_dates = {
         d
         for d, tags in markers.items()
         if "System ETA" in tags or "Critical Feedback" in tags
-    }
+    } | {d for d, ev in event_marks.items() if ev == EVENT_CRITICAL}
+
     fill_blocked = PatternFill(
         start_color=BLOCKED_FILL.lstrip("#"),
         end_color=BLOCKED_FILL.lstrip("#"),
@@ -1148,6 +1427,18 @@ def export_timeline_xlsx(df: pd.DataFrame, timeline: dict[str, Any]) -> bytes:
         end_color=EVENT_MILESTONE_FILL.lstrip("#"),
         fill_type="solid",
     )
+    fill_sys_a = PatternFill(
+        start_color=EXPORT_SYSTEM_FILL_A.lstrip("#"),
+        end_color=EXPORT_SYSTEM_FILL_A.lstrip("#"),
+        fill_type="solid",
+    )
+    fill_sys_b = PatternFill(
+        start_color=EXPORT_SYSTEM_FILL_B.lstrip("#"),
+        end_color=EXPORT_SYSTEM_FILL_B.lstrip("#"),
+        fill_type="solid",
+    )
+    side = Side(style="thin", color=EXPORT_CELL_BORDER)
+    side_strong = Side(style="medium", color=EXPORT_CELL_BORDER)
     header_font = Font(bold=True)
     wrap = Alignment(wrap_text=True, vertical="top")
     center_left = Alignment(wrap_text=True, vertical="center", horizontal="left")
@@ -1157,49 +1448,108 @@ def export_timeline_xlsx(df: pd.DataFrame, timeline: dict[str, Any]) -> bytes:
     ws.title = "Timeline"
 
     columns = list(df.columns)
+
+    def _border(*, top: bool = False, bottom: bool = False) -> Border:
+        return Border(
+            left=side,
+            right=side,
+            top=side_strong if top else Side(style=None),
+            bottom=side_strong if bottom else Side(style=None),
+        )
+
+    def _paint(
+        cell,
+        *,
+        fill: PatternFill | None = None,
+        top: bool = False,
+        bottom: bool = False,
+    ) -> None:
+        cell.border = _border(top=top, bottom=bottom)
+        if fill is not None:
+            cell.fill = fill
+
     for col_idx, col_name in enumerate(columns, start=1):
-        cell = ws.cell(row=1, column=col_idx, value=str(col_name))
+        header_value = (
+            str(col_name)
+            if col_name == "Date"
+            else format_date_display(str(col_name))
+        )
+        cell = ws.cell(row=1, column=col_idx, value=header_value)
         cell.font = header_font
-        if col_name in blocked:
-            cell.fill = fill_blocked
+        fill = fill_blocked if col_name in calendar_blocked else None
+        _paint(cell, fill=fill)
 
     records = df.to_dict(orient="records")
     excel_row = 2
     i = 0
+    system_index = 0
+
+    def _fill_for(
+        col_name: str, row_label: str, sys_fill: PatternFill | None
+    ) -> PatternFill | None:
+        if col_name in calendar_blocked:
+            return fill_blocked
+        if row_label == "Event" and col_name in milestone_dates:
+            return fill_milestone
+        if col_name == "Date":
+            return sys_fill
+        return sys_fill
+
+    def _write_data_row(
+        rec: dict,
+        r_idx: int,
+        *,
+        row_label: str,
+        sys_fill: PatternFill | None = None,
+        top: bool = False,
+        bottom: bool = False,
+    ) -> None:
+        for col_idx, col_name in enumerate(columns, start=1):
+            raw = rec.get(col_name, "")
+            if raw is None or (isinstance(raw, float) and pd.isna(raw)):
+                value = ""
+            else:
+                value = str(raw)
+            cell = ws.cell(row=r_idx, column=col_idx, value=value)
+            cell.alignment = wrap
+            _paint(
+                cell,
+                fill=_fill_for(col_name, row_label, sys_fill),
+                top=top,
+                bottom=bottom,
+            )
+
     while i < len(records):
         record = records[i]
-        row_label = "" if record.get("Row") is None else str(record.get("Row"))
+        row_label = "" if record.get("Date") is None else str(record.get("Date"))
         next_label = None
         if i + 1 < len(records):
-            nxt = records[i + 1].get("Row")
+            nxt = records[i + 1].get("Date")
             next_label = "" if nxt is None else str(nxt)
 
-        # System schedule + following blank-label profile row → merge first column
         merge_pair = (
-            row_label not in ("", "Date", "Event")
+            row_label not in ("", "Event")
             and next_label == ""
         )
 
-        def _write_data_row(rec: dict, r_idx: int, *, is_event: bool) -> None:
-            for col_idx, col_name in enumerate(columns, start=1):
-                raw = rec.get(col_name, "")
-                if raw is None or (isinstance(raw, float) and pd.isna(raw)):
-                    value = ""
-                else:
-                    value = str(raw)
-                cell = ws.cell(row=r_idx, column=col_idx, value=value)
-                cell.alignment = wrap
-                if col_name == "Row":
-                    continue
-                if col_name in blocked:
-                    cell.fill = fill_blocked
-                elif is_event and col_name in milestone_dates:
-                    cell.fill = fill_milestone
-
         if merge_pair:
-            _write_data_row(record, excel_row, is_event=False)
-            _write_data_row(records[i + 1], excel_row + 1, is_event=False)
-            # Merge first column; keep system name centered across both rows
+            sys_fill = fill_sys_a if system_index % 2 == 0 else fill_sys_b
+            _write_data_row(
+                record,
+                excel_row,
+                row_label=row_label,
+                sys_fill=sys_fill,
+                top=True,
+                bottom=False,
+            )
+            _write_data_row(
+                records[i + 1],
+                excel_row + 1,
+                row_label="",
+                sys_fill=sys_fill,
+                top=False,
+                bottom=True,
+            )
             ws.merge_cells(
                 start_row=excel_row,
                 start_column=1,
@@ -1208,10 +1558,19 @@ def export_timeline_xlsx(df: pd.DataFrame, timeline: dict[str, Any]) -> bytes:
             )
             label_cell = ws.cell(row=excel_row, column=1, value=row_label)
             label_cell.alignment = center_left
+            _paint(label_cell, fill=sys_fill, top=True, bottom=True)
             excel_row += 2
             i += 2
+            system_index += 1
         else:
-            _write_data_row(record, excel_row, is_event=(row_label == "Event"))
+            _write_data_row(
+                record,
+                excel_row,
+                row_label=row_label,
+                sys_fill=None,
+                top=False,
+                bottom=(row_label == "Event"),
+            )
             excel_row += 1
             i += 1
 
@@ -1223,6 +1582,7 @@ def export_timeline_xlsx(df: pd.DataFrame, timeline: dict[str, Any]) -> bytes:
     buf = BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
 
 
 def fillable_dates(timeline: dict[str, Any]) -> list[str]:

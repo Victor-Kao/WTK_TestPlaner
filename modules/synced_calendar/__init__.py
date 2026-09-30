@@ -7,10 +7,19 @@ from typing import Any
 
 import streamlit.components.v1 as components
 
-from modules.config import CELL_AHEAD_OPT, CELL_POSTPONE_OPT
-
+from modules.config import (
+    CELL_AHEAD_OPT,
+    CELL_POSTPONE_OPT,
+    EVENT_CRITICAL,
+    EVENT_DETAIL_CF,
+    EVENT_DETAIL_CRITICAL_OPTS,
+    EVENT_DETAIL_ETA,
+    EVENT_NONE,
+    EVENT_OCCUPIED,
+    EVENT_OPTS,
+)
 from modules.data_loader import profile_column_for_weight
-from modules.timeline import sorted_system_keys
+from modules.timeline import ensure_event_state, sorted_system_keys
 
 _FRONTEND = Path(__file__).parent / "frontend"
 _component = components.declare_component("synced_calendar", path=str(_FRONTEND))
@@ -27,16 +36,18 @@ def render_synced_calendar(
     """
     Render split tables (Calendar marks + one table per System).
 
-    Under each system schedule row, a read-only PROFILE note row is shown
-    (from test_plan_info_detail.csv by system weight). Empty profile → blank.
+    Calendar marks: Weekday, Event (- / Occupied / Critical Event), Detail.
+    Under each system schedule row, a read-only PROFILE note row is shown.
 
     Returns event dict when user changes a cell:
       - {kind: "system", system, date, value, nonce}
-      - {kind: "mark_empty", date, value, nonce}  value is "" or "Empty"
-      - {kind: "shift_system", system, delta, nonce}  whole-row ±1
-      - {kind: "shift_from_date", system, date, delta, nonce}  from selected date ±1
-      - {kind: "rename_system", system, name, nonce}  rename row label
+      - {kind: "mark_event", date, value, nonce}  Event row
+      - {kind: "event_detail", date, value, nonce}  Detail row
+      - {kind: "shift_system", system, delta, nonce}
+      - {kind: "shift_from_date", system, date, delta, nonce}
+      - {kind: "rename_system", system, name, nonce}
     """
+    ensure_event_state(timeline)
     dates: list[str] = list(timeline.get("dates", []))
     markers: dict = timeline.get("markers", {})
     calendar_blocked = list(
@@ -47,9 +58,12 @@ def render_synced_calendar(
             if "Weekend" in tags or "Holiday" in tags
         ]
     )
-    empty_marks = list(timeline.get("empty_marks", []))
+    # Occupied days (legacy empty_marks) — system cells locked
+    occupied_marks = list(timeline.get("empty_marks", []))
     blocked = list(timeline.get("blocked", []))
     grid: dict = timeline.get("grid", {})
+    event_marks = dict(timeline.get("event_marks") or {})
+    event_details = dict(timeline.get("event_details") or {})
 
     profile_col = None
     if weight_kg is not None and detail_by_id:
@@ -57,6 +71,8 @@ def render_synced_calendar(
 
     weekdays = [date.fromisoformat(d).strftime("%a") for d in dates]
     marks = [" | ".join(markers.get(d, [])) for d in dates]
+    events = [event_marks.get(d, EVENT_NONE) for d in dates]
+    details = [event_details.get(d, EVENT_NONE) for d in dates]
 
     systems = []
     for name in sorted_system_keys(timeline):
@@ -86,11 +102,20 @@ def render_synced_calendar(
         dates=dates,
         weekdays=weekdays,
         marks=marks,
+        events=events,
+        details=details,
         calendar_blocked=calendar_blocked,
-        empty_marks=empty_marks,
+        empty_marks=occupied_marks,
         blocked=blocked,
         systems=systems,
         options=options,
+        event_opts=list(EVENT_OPTS),
+        detail_critical_opts=list(EVENT_DETAIL_CRITICAL_OPTS),
+        event_none=EVENT_NONE,
+        event_occupied=EVENT_OCCUPIED,
+        event_critical=EVENT_CRITICAL,
+        detail_eta=EVENT_DETAIL_ETA,
+        detail_cf=EVENT_DETAIL_CF,
         shift_ahead_opt=CELL_AHEAD_OPT,
         shift_postpone_opt=CELL_POSTPONE_OPT,
         key=key,
