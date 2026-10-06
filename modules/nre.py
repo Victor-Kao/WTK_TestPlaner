@@ -22,18 +22,43 @@ from modules.config import (
 from modules.data_loader import load_location_info, load_test_plan_info, test_info_by_id
 
 # ROSA NRE template columns (Sheet1)
-_NRE_PHASE_COLS = {"Concept": "Concept", "BCT": "BCT", "NOT": "NOT"}
-_NRE_TEMPLATE_HEADERS = [
-    "Test Item",
-    "Lab Location",
-    "Lab Rate",
-    "Concept",
-    "BCT",
-    "NOT",
-    "Sub Total",
-    "Comments",
-]
-_NRE_SUBTOTAL_FORMULA = "=SUM(D{row}:F{row})*C{row}"
+_NRE_PHASE_ORDER = ["Concept", "BU", "CT", "BCT", "NT", "OT", "NOT"]
+_NRE_PHASE_COLS = {p: p for p in _NRE_PHASE_ORDER}
+_NRE_PHASE_EXCLUSIVE_GROUPS = (
+    ("BCT", frozenset({"BU", "CT"})),
+    ("NOT", frozenset({"NT", "OT"})),
+)
+
+
+def _nre_phase_columns(phases: list[str] | None) -> list[str]:
+    """Selected phase columns in canonical order (Concept → … → NOT)."""
+    if not phases:
+        return list(_NRE_PHASE_ORDER)
+    wanted = {str(p) for p in phases}
+    ordered = [p for p in _NRE_PHASE_ORDER if p in wanted]
+    return ordered or list(_NRE_PHASE_ORDER)
+
+
+def _nre_headers(phase_cols: list[str]) -> list[str]:
+    return [
+        "Test Item",
+        "Lab Location",
+        "Lab Rate",
+        *phase_cols,
+        "Sub Total",
+        "Comments",
+    ]
+
+
+def _nre_subtotal_formula(n_phases: int) -> str:
+    """Excel formula template: SUM(phase cols) × Lab Rate."""
+    from openpyxl.utils import get_column_letter
+
+    if n_phases <= 0:
+        return "=0*C{row}"
+    first = get_column_letter(4)
+    last = get_column_letter(3 + n_phases)
+    return f"=SUM({first}{{row}}:{last}{{row}})*C{{row}}"
 
 
 def compute_multiplier(
@@ -75,13 +100,52 @@ def aux_costs_have_content(aux_costs: dict[str, Any] | None) -> bool:
 
 
 def first_nre_phase(phases: list[str]) -> str | None:
-    """Earliest phase among selection in Concept → BCT → NOT order."""
+    """Earliest phase among selection in Concept → BU/CT/BCT → NT/OT/NOT order."""
     selected = {str(p) for p in phases}
     for p in PHASES:
         if p in selected:
             return p
     return str(phases[0]) if phases else None
 
+
+def sanitize_nre_phases(phases: list[str] | None) -> list[str]:
+    """
+    Drop conflicting phases (BCT vs BU/CT, NOT vs NT/OT), then return the
+    selection in fixed generate order:
+    Concept → BU → CT → BCT → NT → OT → NOT
+    (independent of the order the user picked them in the multiselect).
+    """
+    if not phases:
+        return []
+    selected = {str(p) for p in phases if str(p) in _NRE_PHASE_COLS}
+    for combined, parts in _NRE_PHASE_EXCLUSIVE_GROUPS:
+        if combined in selected and selected & parts:
+            selected -= parts
+    return [p for p in _NRE_PHASE_ORDER if p in selected]
+
+
+def available_nre_phases(selected: list[str] | None) -> list[str]:
+    """
+    Phase options for the multiselect given the current selection:
+      - BU or CT selected → hide BCT
+      - BCT selected → hide BU and CT
+      - NT or OT selected → hide NOT
+      - NOT selected → hide NT and OT
+    """
+    sel = set(sanitize_nre_phases(list(selected or [])))
+    out: list[str] = []
+    for p in PHASES:
+        skip = False
+        for combined, parts in _NRE_PHASE_EXCLUSIVE_GROUPS:
+            if p == combined and sel & parts:
+                skip = True
+                break
+            if p in parts and combined in sel:
+                skip = True
+                break
+        if not skip:
+            out.append(p)
+    return out
 
 
 def _nre_row(
@@ -130,7 +194,7 @@ def build_nre_table(
       phase, functionality, gold_rail, ufit_sor, test_ids, qty_by_id
 
     aux_costs (Wooden Fixture / Dummy / Rack) are charged once and attributed to the
-    earliest selected phase (Concept → BCT → NOT).
+    earliest selected phase (Concept → BU/CT/BCT → NT/OT/NOT).
 
     Lab_Fee = Duration_for_NRE × Lab_Rate (hours × hourly rate), unless aux USD override.
     Final_Fee = Lab_Fee × Qty (aux rows use typed USD as Lab_Fee / Final_Fee).
@@ -269,21 +333,28 @@ def _nre_test_item_label(item: str, tid: str) -> str:
     return item_s or tid_s
 
 
-def pivot_nre_for_template(nre_df: pd.DataFrame) -> pd.DataFrame:
+def pivot_nre_for_template(
+    nre_df: pd.DataFrame,
+    *,
+    phases: list[str] | None = None,
+) -> pd.DataFrame:
     """
     Collapse detailed NRE rows into the account template shape:
-    Test Item | Lab Location | Lab Rate | Concept | BCT | NOT | Sub Total | Comments
+    Test Item | Lab Location | Lab Rate | <selected phases> | Sub Total | Comments
 
-    Phase columns hold hours (Duration_for_NRE × Qty). Aux USD rows put the cost in
-    Lab Rate and 1 in the phase column so Sub Total (=SUM(phases)*rate) equals the cost.
-    SV0* Test_IDs show as "name (ID)"; other IDs show name only.
+    Only selected phase columns are included (canonical order). Hours come from
+    Duration_for_NRE × Qty. Aux USD rows put the cost in Lab Rate and 1 in the
+    phase column so Sub Total (=SUM(phases)*rate) equals the cost.
     """
+    phase_cols = _nre_phase_columns(phases)
+    headers = _nre_headers(phase_cols)
     if nre_df is None or nre_df.empty:
-        return pd.DataFrame(columns=_NRE_TEMPLATE_HEADERS)
+        return pd.DataFrame(columns=headers)
 
     # Preserve first-seen order of Test_ID
     order: list[str] = []
     buckets: dict[str, dict[str, Any]] = {}
+    phase_set = set(phase_cols)
 
     for rec in nre_df.to_dict(orient="records"):
         tid = str(rec.get("Test_ID", "")).strip()
@@ -297,9 +368,7 @@ def pivot_nre_for_template(nre_df: pd.DataFrame) -> pd.DataFrame:
                 "Test Item": _nre_test_item_label(item, tid),
                 "Lab Location": str(rec.get("Location", "") or ""),
                 "Lab Rate": 0.0,
-                "Concept": 0.0,
-                "BCT": 0.0,
-                "NOT": 0.0,
+                **{p: 0.0 for p in phase_cols},
                 "Comments": "",
                 "_aux": _is_aux_cost_row(tid),
             }
@@ -307,14 +376,14 @@ def pivot_nre_for_template(nre_df: pd.DataFrame) -> pd.DataFrame:
         if _is_aux_cost_row(tid):
             cost = float(rec.get("Final_Fee") or rec.get("Lab_Fee") or 0)
             b["Lab Rate"] = cost
-            if phase in _NRE_PHASE_COLS:
+            if phase in phase_set:
                 b[phase] = float(b.get(phase, 0) or 0) + 1.0
         else:
             rate = float(rec.get("Lab_Rate") or 0)
             if rate:
                 b["Lab Rate"] = rate
             hours = float(rec.get("Duration_for_NRE") or 0) * float(rec.get("Qty") or 1)
-            if phase in _NRE_PHASE_COLS:
+            if phase in phase_set:
                 b[phase] = float(b.get(phase, 0) or 0) + hours
             if not b["Lab Location"] and rec.get("Location"):
                 b["Lab Location"] = str(rec.get("Location") or "")
@@ -322,24 +391,20 @@ def pivot_nre_for_template(nre_df: pd.DataFrame) -> pd.DataFrame:
     rows: list[dict[str, Any]] = []
     for tid in order:
         b = buckets[tid]
-        concept = float(b["Concept"] or 0)
-        bct = float(b["BCT"] or 0)
-        not_ = float(b["NOT"] or 0)
+        phase_hours = {p: float(b.get(p, 0) or 0) for p in phase_cols}
         rate = float(b["Lab Rate"] or 0)
-        sub = round((concept + bct + not_) * rate, 2)
+        sub = round(sum(phase_hours.values()) * rate, 2)
         rows.append(
             {
                 "Test Item": b["Test Item"],
                 "Lab Location": b["Lab Location"],
                 "Lab Rate": rate,
-                "Concept": concept if concept else None,
-                "BCT": bct if bct else None,
-                "NOT": not_ if not_ else None,
+                **{p: (v if v else None) for p, v in phase_hours.items()},
                 "Sub Total": sub,
                 "Comments": b["Comments"] or None,
             }
         )
-    return pd.DataFrame(rows, columns=_NRE_TEMPLATE_HEADERS)
+    return pd.DataFrame(rows, columns=headers)
 
 
 def _excel_num(value: Any) -> float | None:
@@ -354,9 +419,27 @@ def _excel_num(value: Any) -> float | None:
     return num if num else None
 
 
-def _copy_nre_template_row(ws: Worksheet, src_row: int, dest_row: int) -> None:
+def nre_grand_total(pivoted: pd.DataFrame) -> float:
+    """Sum of all row Sub Total values (canonical grand total)."""
+    if pivoted is None or pivoted.empty or "Sub Total" not in pivoted.columns:
+        return 0.0
+    return round(
+        float(pd.to_numeric(pivoted["Sub Total"], errors="coerce").fillna(0).sum()),
+        2,
+    )
+
+
+def _copy_nre_template_row(
+    ws: Worksheet,
+    src_row: int,
+    dest_row: int,
+    *,
+    ncols: int,
+    subtotal_col: int,
+    subtotal_formula: str,
+) -> None:
     """Copy cell styles/number formats from src_row and install Sub Total formula."""
-    for col in range(1, 9):
+    for col in range(1, ncols + 1):
         src = ws.cell(src_row, col)
         dst = ws.cell(dest_row, col)
         if src.has_style:
@@ -366,7 +449,7 @@ def _copy_nre_template_row(ws: Worksheet, src_row: int, dest_row: int) -> None:
             dst.number_format = src.number_format
             dst.protection = copy(src.protection)
             dst.alignment = copy(src.alignment)
-    ws.cell(dest_row, 7).value = _NRE_SUBTOTAL_FORMULA.format(row=dest_row)
+    ws.cell(dest_row, subtotal_col).value = subtotal_formula.format(row=dest_row)
 
 
 def export_nre_xlsx(
@@ -377,58 +460,86 @@ def export_nre_xlsx(
     """
     Fill the account NRE template (colors + Sub Total formulas) and return bytes.
 
-    Layout: Test Item | Lab Location | Lab Rate | Concept | BCT | NOT | Sub Total | Comments
-    (SV0* IDs appended as "name (ID)"; AUX / ENG / REL show name only.)
+    Only phase columns listed in meta["phases"] are kept (e.g. BU / CT / NOT).
+    Layout: Test Item | Lab Location | Lab Rate | <phases> | Sub Total | Comments
     """
     account = str(meta.get("account") or "")
+    phase_cols = _nre_phase_columns(list(meta.get("phases") or []))
     if template_path is not None:
         template = template_path
     elif account:
         template = nre_template_path(account)
     else:
         template = None
-    pivoted = pivot_nre_for_template(nre_df)
+    pivoted = pivot_nre_for_template(nre_df, phases=phase_cols)
     buf = BytesIO()
+
+    n_phases = len(phase_cols)
+    subtotal_col = 3 + n_phases + 1
+    comments_col = subtotal_col + 1
+    ncols = comments_col
+    subtotal_formula = _nre_subtotal_formula(n_phases)
+    phase_col_by_name = {name: 4 + i for i, name in enumerate(phase_cols)}
 
     if template is not None and template.exists():
         wb = load_workbook(template)
         ws = wb.active
+        # Drop unselected phase columns from the full template (right → left)
+        full_phase_cols = {
+            name: 4 + i for i, name in enumerate(_NRE_PHASE_ORDER)
+        }
+        for col_idx in sorted(
+            (
+                full_phase_cols[p]
+                for p in _NRE_PHASE_ORDER
+                if p not in phase_col_by_name
+            ),
+            reverse=True,
+        ):
+            ws.delete_cols(col_idx)
+
         data_start = 2
         style_src = data_start
-        # Pre-styled blank rows in the ROSA template
         prefilled_last = max(ws.max_row, data_start)
-
         records = pivoted.to_dict(orient="records")
+
         for i, rec in enumerate(records):
             r = data_start + i
             if r > prefilled_last:
-                _copy_nre_template_row(ws, style_src, r)
+                _copy_nre_template_row(
+                    ws,
+                    style_src,
+                    r,
+                    ncols=ncols,
+                    subtotal_col=subtotal_col,
+                    subtotal_formula=subtotal_formula,
+                )
             else:
-                # Ensure Sub Total formula is present (template already has it)
-                if not ws.cell(r, 7).value:
-                    ws.cell(r, 7).value = _NRE_SUBTOTAL_FORMULA.format(row=r)
+                ws.cell(r, subtotal_col).value = subtotal_formula.format(row=r)
             ws.cell(r, 1).value = rec.get("Test Item")
             ws.cell(r, 2).value = rec.get("Lab Location") or None
             rate = rec.get("Lab Rate")
             ws.cell(r, 3).value = (
-                None if rate is None or (isinstance(rate, float) and pd.isna(rate)) else float(rate)
-            )
-            ws.cell(r, 4).value = _excel_num(rec.get("Concept"))
-            ws.cell(r, 5).value = _excel_num(rec.get("BCT"))
-            ws.cell(r, 6).value = _excel_num(rec.get("NOT"))
-            # column G = formula (do not overwrite with computed value)
-            comments = rec.get("Comments")
-            ws.cell(r, 8).value = (
                 None
-                if comments is None or (isinstance(comments, float) and pd.isna(comments))
+                if rate is None or (isinstance(rate, float) and pd.isna(rate))
+                else float(rate)
+            )
+            for phase_name, col_idx in phase_col_by_name.items():
+                ws.cell(r, col_idx).value = _excel_num(rec.get(phase_name))
+            comments = rec.get("Comments")
+            ws.cell(r, comments_col).value = (
+                None
+                if comments is None
+                or (isinstance(comments, float) and pd.isna(comments))
                 else comments
             )
 
-        # Clear unused pre-styled rows (keep fills + Sub Total formula)
-        for r in range(data_start + len(records), prefilled_last + 1):
-            for c in (1, 2, 3, 4, 5, 6, 8):
+        last_data = data_start + len(records) - 1
+        # Clear unused pre-styled rows (keep fills; restore Sub Total formulas)
+        for r in range(max(last_data + 1, data_start), prefilled_last + 1):
+            for c in (1, 2, 3, *phase_col_by_name.values(), comments_col):
                 ws.cell(r, c).value = None
-            ws.cell(r, 7).value = _NRE_SUBTOTAL_FORMULA.format(row=r)
+            ws.cell(r, subtotal_col).value = subtotal_formula.format(row=r)
 
         wb.save(buf)
     else:

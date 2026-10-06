@@ -45,11 +45,14 @@ from modules.data_loader import (
 )
 from modules.nre import (
     aux_costs_have_content,
+    available_nre_phases,
     build_nre_table,
     export_nre_xlsx,
     first_nre_phase,
+    nre_grand_total,
     phase_has_nre_content,
     pivot_nre_for_template,
+    sanitize_nre_phases,
 )
 from modules.timeline import (
     apply_sequence_template,
@@ -878,17 +881,39 @@ else:
                 "one-time (under Testing Phase) and land on the earliest selected "
                 "phase in the Excel template. Each phase has its own options + "
                 "test items. "
+                "BCT is exclusive with BU/CT; NOT is exclusive with NT/OT. "
                 "Generated table matches `NRE_TEMPLATE_<account>.xlsx` "
-                "(Test Item (ID) · Location · Rate · Concept/BCT/NOT · Sub Total). "
+                "(Test Item · Location · Rate · Concept/BU/CT/BCT/NT/OT/NOT · "
+                "Sub Total). "
                 "**Sub Total** in Excel = `SUM(Concept:NOT) × Lab Rate`."
             )
 
+            if "nre_phases" not in st.session_state:
+                st.session_state.nre_phases = [PHASES[0]]
+            else:
+                cleaned = sanitize_nre_phases(
+                    list(st.session_state.nre_phases or [])
+                )
+                opts_now = available_nre_phases(cleaned)
+                st.session_state.nre_phases = [
+                    p for p in cleaned if p in opts_now
+                ] or [PHASES[0]]
+            nre_phase_options = available_nre_phases(
+                list(st.session_state.nre_phases or [])
+            )
             nre_phases = st.multiselect(
                 "Testing Phase (multi-select)",
-                PHASES,
-                default=[PHASES[0]],
+                nre_phase_options,
                 key="nre_phases",
+                help=(
+                    "BU/CT hide BCT (and the reverse). "
+                    "NT/OT hide NOT (and the reverse). "
+                    "Generated columns always use order: "
+                    "Concept → BU → CT → BCT → NT → OT → NOT."
+                ),
             )
+            # Fixed generate / UI section order (ignore multiselect pick order)
+            nre_phases = sanitize_nre_phases(list(nre_phases))
 
             st.caption(
                 "One-time fixture / rack charges (USD) — applied once to the "
@@ -1099,19 +1124,24 @@ else:
 
             if st.session_state.nre_df is not None and not st.session_state.nre_df.empty:
                 nre_df = st.session_state.nre_df
-                nre_view = pivot_nre_for_template(nre_df)
+                selected_phases = sanitize_nre_phases(list(nre_phases))
+                nre_view = pivot_nre_for_template(
+                    nre_df, phases=selected_phases
+                )
                 st.dataframe(nre_view, use_container_width=True, hide_index=True)
-                grand = float(nre_view["Sub Total"].fillna(0).sum())
-                st.metric("Sub Total (grand total)", f"{grand:,.0f}")
+                st.metric(
+                    "Sub Total (grand total)",
+                    f"{nre_grand_total(nre_view):,.2f}",
+                    help="Sum of all row Sub Total values.",
+                )
 
-                used_phases = list(dict.fromkeys(nre_df["Phase"].astype(str).tolist()))
                 meta = {
                     "account": account,
                     "project_name": project_name,
                     "project_phase": project_phase,
                     "weight_kg": weight_kg,
                     "standard": standard,
-                    "phases": used_phases,
+                    "phases": selected_phases,
                     "gold_rail": "per phase",
                     "gold_rail_phase": "per phase",
                     "ufit_sor": "per phase",

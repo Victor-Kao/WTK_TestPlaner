@@ -6,7 +6,8 @@ ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = ROOT / "data"
 
 ACCOUNTS = ["ROSA", "NAOMI"]
-PHASES = ["Concept", "BCT", "NOT"]  # NRE testing phases
+# NRE testing phases. BCT is mutually exclusive with BU/CT; NOT with NT/OT.
+PHASES = ["Concept", "BU", "CT", "BCT", "NT", "OT", "NOT"]
 PROJECT_PHASES = ["C0", "C1", "C2", "C3", "C4", "C5", "C6"]  # setup project phase
 FUNCTIONALITY_OPTS = ["Functional", "Non-functional"]
 YES_NO = ["Yes", "No"]
@@ -67,7 +68,15 @@ TW_HOLIDAY_CDN_FALLBACK = (
 
 # Fee multipliers used for NRE final fee (editable business rules)
 NRE_MULTIPLIERS = {
-    "phase": {"Concept": 1.0, "BCT": 1.15, "NOT": 1.25},
+    "phase": {
+        "Concept": 1.0,
+        "BU": 1.15,
+        "CT": 1.15,
+        "BCT": 1.15,
+        "NT": 1.25,
+        "OT": 1.25,
+        "NOT": 1.25,
+    },
     "functionality": {"Functional": 1.0, "Non-functional": 0.9},
     "gold_rail": {"Yes": 1.1, "No": 1.0},
     "ufit_sor": {"Yes": 1.05, "No": 1.0},  # Only_ORv3_MGX_Mini_Rack_wo_L11_Rack flag
