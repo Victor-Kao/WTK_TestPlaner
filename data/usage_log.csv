@@ -12,3 +12,5 @@ TEST PLAN,ROSA,jj,C0,25.0,2026-10-07,2026-10-21,3,Functional,2026-09-30T20:43:41
 TEST PLAN,ROSA,yy,C0,25.0,2026-10-07,2026-10-21,3,Functional,2026-09-30T20:47:06
 NRE,,,,,,,,"Concept:Functional, CT:Functional, NOT:Functional",2026-10-03T14:52:53
 NRE,ROSA,kk,C0,25.0,2026-10-10,2026-10-24,1,"Concept:Functional, CT:Functional",2026-10-03T15:06:36
+NRE,,,,,,,,"Concept:Functional, CT:Functional, NOT:Functional",2026-10-06T19:25:12
+NRE,,,,,,,,"Concept:Functional, CT:Functional, OT:Functional",2026-10-06T19:27:26

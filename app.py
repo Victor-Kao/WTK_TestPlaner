@@ -1036,24 +1036,18 @@ else:
                     )
 
                 qty_by_id: dict[str, int] = {}
-                # U-fit / Leading Edge: default 4, or 3 when Gold Rail = Yes
-                ufit_default = 3 if gold_rail == "Yes" else 4
+                # U-fit / Leading Edge: default 1 for every phase (Gold Rail independent)
                 ufit_key = f"nre_qty_ufit_{phase}"
-                ufit_gold_track = f"_nre_ufit_gold_{phase}"
-                if (
-                    ufit_gold_track not in st.session_state
-                    or st.session_state[ufit_gold_track] != gold_rail
-                ):
-                    st.session_state[ufit_key] = ufit_default
-                    st.session_state[ufit_gold_track] = gold_rail
-                st.caption("U-fit / Leading Edge quantity")
+                if ufit_key not in st.session_state:
+                    st.session_state[ufit_key] = 1
+                st.caption("Run of U-fit / Leading Edge")
                 qty_by_id[NRE_UFIT_ID] = int(
                     st.number_input(
-                        "U-fit / Leading Edge quantity",
+                        "Run of U-fit / Leading Edge",
                         min_value=0,
                         step=1,
                         key=ufit_key,
-                        help="Default 4; default 3 when Gold Rail is Yes.",
+                        help="Default 1 for every phase (with or without Gold Rail).",
                     )
                 )
 

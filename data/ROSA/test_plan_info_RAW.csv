@@ -12,7 +12,7 @@ SV0128,Operational Half Sine Shock Test Procedure for Rack Systems,2,5,Op ORV3 H
 SV0105,Operational Random Vibration Test Procedure,2,5,Op Random Vibration,140
 SV0114,Rack and Stack Vibration Test,1,,RnS - L11,800
 ENG0013791_CHECK,Pre/Post Process and Function Check,1,0,Pre-Process,0
-ENG0013791_UFIT,U-envelop measurement ,1,1,U-fit / Leading Edge ,33
+ENG0013791_UFIT,U-envelop measurement ,1,10.5,U-fit / Leading Edge ,33
 ENG0013791_GRS,Gold Rail selection,2,3,Gold Rail selection,33
 REL0164_OM,Optical Measurement,5,1,OM,33
 REL0164_DNP,Dye and Pry Procedure,7,1,DnP,200

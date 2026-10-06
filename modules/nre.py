@@ -7,6 +7,7 @@ from typing import Any
 
 import pandas as pd
 from openpyxl import load_workbook
+from openpyxl.styles import Alignment
 from openpyxl.worksheet.worksheet import Worksheet
 
 from modules.config import (
@@ -345,6 +346,9 @@ def pivot_nre_for_template(
     Only selected phase columns are included (canonical order). Hours come from
     Duration_for_NRE × Qty. Aux USD rows put the cost in Lab Rate and 1 in the
     phase column so Sub Total (=SUM(phases)*rate) equals the cost.
+
+    U-envelop measurement (U-fit) Comments list runs per phase, one per line, e.g.
+    "1x for Concept\\n1x for BCT".
     """
     phase_cols = _nre_phase_columns(phases)
     headers = _nre_headers(phase_cols)
@@ -371,6 +375,7 @@ def pivot_nre_for_template(
                 **{p: 0.0 for p in phase_cols},
                 "Comments": "",
                 "_aux": _is_aux_cost_row(tid),
+                "_ufit_qty_by_phase": {},
             }
         b = buckets[tid]
         if _is_aux_cost_row(tid):
@@ -382,9 +387,13 @@ def pivot_nre_for_template(
             rate = float(rec.get("Lab_Rate") or 0)
             if rate:
                 b["Lab Rate"] = rate
-            hours = float(rec.get("Duration_for_NRE") or 0) * float(rec.get("Qty") or 1)
+            qty = float(rec.get("Qty") or 1)
+            hours = float(rec.get("Duration_for_NRE") or 0) * qty
             if phase in phase_set:
                 b[phase] = float(b.get(phase, 0) or 0) + hours
+            if tid == NRE_UFIT_ID and phase in phase_set and qty > 0:
+                qty_map = b["_ufit_qty_by_phase"]
+                qty_map[phase] = float(qty_map.get(phase, 0) or 0) + qty
             if not b["Lab Location"] and rec.get("Location"):
                 b["Lab Location"] = str(rec.get("Location") or "")
 
@@ -394,6 +403,18 @@ def pivot_nre_for_template(
         phase_hours = {p: float(b.get(p, 0) or 0) for p in phase_cols}
         rate = float(b["Lab Rate"] or 0)
         sub = round(sum(phase_hours.values()) * rate, 2)
+        comment = b["Comments"] or ""
+        if tid == NRE_UFIT_ID:
+            qty_map = b.get("_ufit_qty_by_phase") or {}
+            parts = []
+            for p in phase_cols:
+                q = float(qty_map.get(p, 0) or 0)
+                if q <= 0:
+                    continue
+                q_disp = int(q) if abs(q - int(q)) < 1e-9 else q
+                parts.append(f"{q_disp}x for {p}")
+            if parts:
+                comment = "\n".join(parts)
         rows.append(
             {
                 "Test Item": b["Test Item"],
@@ -401,7 +422,7 @@ def pivot_nre_for_template(
                 "Lab Rate": rate,
                 **{p: (v if v else None) for p, v in phase_hours.items()},
                 "Sub Total": sub,
-                "Comments": b["Comments"] or None,
+                "Comments": comment or None,
             }
         )
     return pd.DataFrame(rows, columns=headers)
@@ -450,6 +471,84 @@ def _copy_nre_template_row(
             dst.protection = copy(src.protection)
             dst.alignment = copy(src.alignment)
     ws.cell(dest_row, subtotal_col).value = subtotal_formula.format(row=dest_row)
+
+
+def _nre_fit_sheet_layout(
+    ws: Worksheet,
+    *,
+    data_start: int,
+    last_data: int,
+    ncols: int,
+    comments_col: int,
+) -> None:
+    """
+    Widen columns, wrap text, and grow row heights so multi-line Comments /
+    long Test Item text are fully visible (not clipped by default cell size).
+    """
+    from openpyxl.utils import get_column_letter
+
+    # Reasonable widths: Test Item wide, Comments wide enough for "1x for Concept"
+    min_widths = {
+        1: 42,  # Test Item
+        2: 18,  # Lab Location
+        3: 12,  # Lab Rate
+        comments_col: 24,  # Comments
+    }
+    for col in range(1, ncols + 1):
+        letter = get_column_letter(col)
+        current = float(ws.column_dimensions[letter].width or 0)
+        if col == 1:
+            target = 42.0
+        elif col == 2:
+            target = 18.0
+        elif col == 3:
+            target = 12.0
+        elif col == comments_col:
+            target = 24.0
+        elif col == comments_col - 1:  # Sub Total
+            target = 14.0
+        else:
+            target = 10.0
+        ws.column_dimensions[letter].width = max(current, target)
+
+    for r in range(1, max(last_data, 1) + 1):
+        for c in (1, 2, comments_col):
+            if c > ncols:
+                continue
+            cell = ws.cell(r, c)
+            cell.alignment = Alignment(
+                wrap_text=True,
+                vertical="center" if r == 1 else "top",
+            )
+
+        if r < data_start or last_data < data_start:
+            continue
+
+        lines = 1
+        comment = ws.cell(r, comments_col).value
+        if comment is not None and str(comment).strip():
+            comment_s = str(comment).replace("\r\n", "\n").replace("\r", "\n")
+            comment_width = float(
+                ws.column_dimensions[get_column_letter(comments_col)].width or 24
+            )
+            line_count = 0
+            for part in comment_s.split("\n"):
+                # chars that fit roughly per wrapped line in this column
+                chars_per_line = max(int(comment_width), 8)
+                line_count += max(1, (len(part) + chars_per_line - 1) // chars_per_line)
+            lines = max(lines, line_count)
+
+        item = ws.cell(r, 1).value
+        if item is not None and str(item).strip():
+            item_width = float(ws.column_dimensions["A"].width or 42)
+            chars_per_line = max(int(item_width), 8)
+            item_lines = max(
+                1, (len(str(item)) + chars_per_line - 1) // chars_per_line
+            )
+            lines = max(lines, item_lines)
+
+        # ~15 pt per line + padding so wrapped text is not clipped
+        ws.row_dimensions[r].height = max(18.0, 15.0 * lines + 6.0)
 
 
 def export_nre_xlsx(
@@ -527,12 +626,21 @@ def export_nre_xlsx(
             for phase_name, col_idx in phase_col_by_name.items():
                 ws.cell(r, col_idx).value = _excel_num(rec.get(phase_name))
             comments = rec.get("Comments")
-            ws.cell(r, comments_col).value = (
-                None
-                if comments is None
+            comment_cell = ws.cell(r, comments_col)
+            if (
+                comments is None
                 or (isinstance(comments, float) and pd.isna(comments))
-                else comments
-            )
+            ):
+                comment_cell.value = None
+            else:
+                comment_cell.value = str(comments)
+                comment_cell.alignment = Alignment(
+                    wrap_text=True, vertical="top"
+                )
+            # Wrap long Test Item / Location too
+            for c in (1, 2):
+                cell = ws.cell(r, c)
+                cell.alignment = Alignment(wrap_text=True, vertical="top")
 
         last_data = data_start + len(records) - 1
         # Clear unused pre-styled rows (keep fills; restore Sub Total formulas)
@@ -541,10 +649,28 @@ def export_nre_xlsx(
                 ws.cell(r, c).value = None
             ws.cell(r, subtotal_col).value = subtotal_formula.format(row=r)
 
+        if records:
+            _nre_fit_sheet_layout(
+                ws,
+                data_start=data_start,
+                last_data=last_data,
+                ncols=ncols,
+                comments_col=comments_col,
+            )
+
         wb.save(buf)
     else:
         with pd.ExcelWriter(buf, engine="openpyxl") as writer:
             pivoted.to_excel(writer, sheet_name="NRE", index=False)
+            ws = writer.sheets["NRE"]
+            if not pivoted.empty:
+                _nre_fit_sheet_layout(
+                    ws,
+                    data_start=2,
+                    last_data=1 + len(pivoted),
+                    ncols=len(pivoted.columns),
+                    comments_col=len(pivoted.columns),
+                )
 
     return buf.getvalue()
 
