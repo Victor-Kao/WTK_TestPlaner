@@ -18,6 +18,15 @@ from modules.config import (
     EMPTY_LABEL,
     EMPTY_TOKEN,
     FUNCTIONALITY_OPTS,
+    HC_CALENDAR_MONTHS,
+    HC_DISTRIBUTION_OPTS,
+    HC_DIST_PER_MONTH,
+    HC_DIST_PER_PHASE,
+    HC_ENGINEER_TYPES,
+    HC_MONTH_DEFAULTS,
+    HC_MONTH_DISPLAY_OPTS,
+    HC_SHOW_MONTH,
+    HC_SHOW_SEQUENCE,
     NRE_AUX_COST_DEFAULTS_USD,
     NRE_AUX_COST_IDS,
     NRE_DNP_ID,
@@ -43,6 +52,7 @@ from modules.data_loader import (
     test_detail_by_id,
     test_info_by_id,
 )
+from modules.headcount import build_headcount_table
 from modules.nre import (
     aux_costs_have_content,
     available_nre_phases,
@@ -89,6 +99,11 @@ def _init_state() -> None:
         "timeline": None,
         "export_df": None,
         "nre_df": None,
+        "hc_phases": None,
+        "hc_nre_hours_by_phase": None,
+        "hc_df": None,
+        "hc_table_phases": None,
+        "hc_table_months": None,
         "last_convert_id": None,
         "editor_version": 0,
         "editor_error": None,
@@ -301,9 +316,357 @@ def _clear_plan_work() -> None:
     st.session_state.timeline = None
     st.session_state.export_df = None
     st.session_state.nre_df = None
+    st.session_state.hc_phases = None
+    st.session_state.hc_nre_hours_by_phase = None
+    st.session_state.hc_df = None
+    st.session_state.hc_table_phases = None
+    st.session_state.hc_table_months = None
     st.session_state.plan_log_context = None
+    _clear_hc_default_seeds()
     st.session_state.editor_version = int(st.session_state.editor_version) + 1
     st.session_state.editor_error = None
+
+
+def _hc_month_default(phase: str) -> int:
+    return int(HC_MONTH_DEFAULTS.get(str(phase), 3))
+
+
+def _hc_eng_slug(engineer: str) -> str:
+    return (
+        str(engineer)
+        .lower()
+        .replace("&", "and")
+        .replace(" ", "_")
+        .replace("/", "_")
+    )
+
+
+def _hc_task_count_key(phase: str, engineer: str) -> str:
+    return f"hc_ntasks_{phase}_{_hc_eng_slug(engineer)}"
+
+
+# Bump when Structure / S&V default task lists change (forces re-seed once).
+_HC_DEFAULTS_SEED_VERSION = 8
+_HC_NRE_DURATION_TASK = "NRE Test Item Duration"
+_HC_NRE_HOURS_PER_PERSON = 160.0  # lab hours → 1.0 HeadCount per Person
+_HC_NRE_DURATION_STRUCTURE_PHASES = frozenset({"Concept", "BU", "BCT"})
+_HC_NRE_DURATION_SV_PHASES = frozenset({"CT", "NT", "OT", "NOT"})
+
+
+def _hc_task_total(number_of_headcount: int, headcount_per_person: float) -> float:
+    """Total task headcount = Number of HeadCount × HeadCount per Person."""
+    return float(number_of_headcount or 0) * float(headcount_per_person or 0)
+
+
+def _nre_phase_hours(
+    cfg: dict,
+    *,
+    info_map: dict[str, dict] | None = None,
+) -> float:
+    """
+    Sum Duration_for_NRE (hours) for NRE items in one phase config:
+    selected test_ids + quantity extras (UFIT / OM / DnP) × qty.
+    """
+    info = info_map or {}
+    hours = 0.0
+    for tid in cfg.get("test_ids") or []:
+        meta = info.get(str(tid))
+        if not meta:
+            continue
+        hours += float(meta.get("Duration_for_NRE") or 0)
+    for tid, qty in (cfg.get("qty_by_id") or {}).items():
+        q = int(qty or 0)
+        if q <= 0:
+            continue
+        meta = info.get(str(tid))
+        if not meta:
+            continue
+        hours += float(meta.get("Duration_for_NRE") or 0) * q
+    return hours
+
+
+def _nre_duration_task(hours: float) -> dict | None:
+    """
+    NRE hours → HeadCount per Person = hours / 160, Number of HeadCount = 2.
+    Example: 16 h → 0.1 per person × 2 people.
+    """
+    h = float(hours or 0)
+    if h <= 0:
+        return None
+    return {
+        "task": _HC_NRE_DURATION_TASK,
+        "number_of_headcount": 2,
+        "headcount_per_person": round(h / _HC_NRE_HOURS_PER_PERSON, 6),
+        "distribution": HC_DIST_PER_PHASE,
+    }
+
+
+def _clear_hc_default_seeds() -> None:
+    """Force headcount default tasks to re-seed (e.g. after NRE regenerate)."""
+    for k in list(st.session_state.keys()):
+        if str(k).startswith("_hc_defaults_ver_"):
+            del st.session_state[k]
+
+
+def _structure_default_tasks(phase: str, *, nre_hours: float = 0.0) -> list[dict]:
+    """
+    Structure Engineer defaults (number_of_headcount=1 unless noted):
+      All phases: Regular Meeting / Discussion — 0.1 per person Per Month
+      Concept: Q&A, Document Study & NRE & Test Plan Analysis — 1 per person Per Phase
+      BCT: Issue Analysis & Discussion — 3 per person Per Phase;
+           S&V Sample Preparation — 1 per person Per Phase
+      BU / CT (split of BCT): same tasks at BU:CT = 2:1
+      NOT: Issue Analysis & Discussion — 1 per person Per Phase
+      NT / OT (split of NOT): same task at NT:OT = 1:1 (0.5 each)
+      Concept / BU / BCT: NRE Test Item Duration — (Σ hours / 160) per person × 2
+    """
+    def _task(
+        name: str,
+        per_person: float,
+        distribution: str,
+        *,
+        number: int = 1,
+    ) -> dict:
+        return {
+            "task": name,
+            "number_of_headcount": number,
+            "headcount_per_person": per_person,
+            "distribution": distribution,
+        }
+
+    tasks = [
+        _task("Regular Meeting / Discussion", 0.1, HC_DIST_PER_MONTH),
+    ]
+    p = str(phase)
+    if p == "Concept":
+        tasks.append(
+            _task(
+                "Q&A, Document Study & NRE & Test Plan Analysis",
+                1.0,
+                HC_DIST_PER_PHASE,
+            )
+        )
+    elif p == "BCT":
+        tasks.extend(
+            [
+                _task("Issue Analysis & Discussion", 3.0, HC_DIST_PER_PHASE),
+                _task("S&V Sample Preparation", 1.0, HC_DIST_PER_PHASE),
+            ]
+        )
+    elif p == "BU":
+        tasks.extend(
+            [
+                _task("Issue Analysis & Discussion", 2.0, HC_DIST_PER_PHASE),
+                _task("S&V Sample Preparation", round(2.0 / 3.0, 6), HC_DIST_PER_PHASE),
+            ]
+        )
+    elif p == "CT":
+        tasks.extend(
+            [
+                _task("Issue Analysis & Discussion", 1.0, HC_DIST_PER_PHASE),
+                _task("S&V Sample Preparation", round(1.0 / 3.0, 6), HC_DIST_PER_PHASE),
+            ]
+        )
+    elif p == "NOT":
+        tasks.append(_task("Issue Analysis & Discussion", 1.0, HC_DIST_PER_PHASE))
+    elif p in ("NT", "OT"):
+        tasks.append(_task("Issue Analysis & Discussion", 0.5, HC_DIST_PER_PHASE))
+
+    if p in _HC_NRE_DURATION_STRUCTURE_PHASES:
+        nre_task = _nre_duration_task(nre_hours)
+        if nre_task:
+            tasks.append(nre_task)
+    return tasks
+
+
+def _sv_default_tasks(phase: str, *, nre_hours: float = 0.0) -> list[dict]:
+    """
+    S&V defaults:
+      Regular Meeting / Discussion — 0.1 per person Per Month (except Concept)
+      CT / NT / OT / NOT: NRE Test Item Duration — (Σ hours / 160) × 2 people
+    """
+    tasks: list[dict] = []
+    p = str(phase)
+    if p != "Concept":
+        tasks.append(
+            {
+                "task": "Regular Meeting / Discussion",
+                "number_of_headcount": 1,
+                "headcount_per_person": 0.1,
+                "distribution": HC_DIST_PER_MONTH,
+            }
+        )
+    if p in _HC_NRE_DURATION_SV_PHASES:
+        nre_task = _nre_duration_task(nre_hours)
+        if nre_task:
+            tasks.append(nre_task)
+    return tasks
+
+
+def _seed_hc_engineer_defaults(phase: str, engineer: str) -> None:
+    """Seed (or refresh once per version) default tasks for a phase/engineer."""
+    n_key = _hc_task_count_key(phase, engineer)
+    slug = _hc_eng_slug(engineer)
+    ver_key = f"_hc_defaults_ver_{phase}_{slug}"
+    if st.session_state.get(ver_key) == _HC_DEFAULTS_SEED_VERSION:
+        return
+
+    nre_hours = float(
+        (st.session_state.get("hc_nre_hours_by_phase") or {}).get(phase, 0) or 0
+    )
+    if engineer == "Structure Engineer":
+        defaults = _structure_default_tasks(phase, nre_hours=nre_hours)
+    elif engineer == "S&V Engineer":
+        defaults = _sv_default_tasks(phase, nre_hours=nre_hours)
+    else:
+        defaults = []
+
+    st.session_state[n_key] = len(defaults)
+    for i, task in enumerate(defaults):
+        st.session_state[f"hc_task_name_{phase}_{slug}_{i}"] = task["task"]
+        st.session_state[f"hc_task_n_{phase}_{slug}_{i}"] = int(
+            task.get("number_of_headcount", 1)
+        )
+        per = task.get("headcount_per_person", task.get("headcount", 0.0))
+        st.session_state[f"hc_task_hc_{phase}_{slug}_{i}"] = float(per)
+        st.session_state[f"hc_task_dist_{phase}_{slug}_{i}"] = task[
+            "distribution"
+        ]
+        # 1-based within phase; end=999 clamps to current phase month count in UI
+        st.session_state[f"hc_task_start_{phase}_{slug}_{i}"] = int(
+            task.get("start_month", 1) or 1
+        )
+        default_end = (
+            int(task["end_month"])
+            if task.get("end_month") is not None
+            else (
+                999
+                if task.get("distribution") == HC_DIST_PER_PHASE
+                else 1
+            )
+        )
+        st.session_state[f"hc_task_end_{phase}_{slug}_{i}"] = default_end
+    st.session_state[ver_key] = _HC_DEFAULTS_SEED_VERSION
+
+
+def _collect_hc_tasks_for_phase(
+    phase: str, *, n_months: int = 0
+) -> dict[str, list[dict]]:
+    """Read task widgets for one phase → engineer → task list."""
+    out: dict[str, list[dict]] = {}
+    n_months = max(int(n_months or 0), 0)
+    for eng in HC_ENGINEER_TYPES:
+        n_key = _hc_task_count_key(phase, eng)
+        n_tasks = int(st.session_state.get(n_key, 0) or 0)
+        tasks: list[dict] = []
+        slug = _hc_eng_slug(eng)
+        for i in range(n_tasks):
+            name = str(
+                st.session_state.get(f"hc_task_name_{phase}_{slug}_{i}", "")
+                or ""
+            ).strip()
+            n_hc = int(
+                st.session_state.get(f"hc_task_n_{phase}_{slug}_{i}", 1) or 1
+            )
+            per_person = float(
+                st.session_state.get(f"hc_task_hc_{phase}_{slug}_{i}", 0.0)
+                or 0.0
+            )
+            total_hc = _hc_task_total(n_hc, per_person)
+            dist = str(
+                st.session_state.get(
+                    f"hc_task_dist_{phase}_{slug}_{i}", HC_DIST_PER_MONTH
+                )
+                or HC_DIST_PER_MONTH
+            )
+            start_m: int | None = None
+            end_m: int | None = None
+            if dist == HC_DIST_PER_PHASE:
+                start_m = int(
+                    st.session_state.get(
+                        f"hc_task_start_{phase}_{slug}_{i}", 1
+                    )
+                    or 1
+                )
+                end_m = int(
+                    st.session_state.get(
+                        f"hc_task_end_{phase}_{slug}_{i}",
+                        n_months if n_months else 1,
+                    )
+                    or 1
+                )
+                if n_months > 0:
+                    start_m = max(1, min(start_m, n_months))
+                    end_m = max(start_m, min(end_m, n_months))
+                else:
+                    start_m = max(1, start_m)
+                    end_m = max(start_m, end_m)
+            if not name and total_hc == 0:
+                continue
+            tasks.append(
+                {
+                    "task": name or f"Task {i + 1}",
+                    "number_of_headcount": n_hc,
+                    "headcount_per_person": per_person,
+                    "headcount": total_hc,
+                    "distribution": dist,
+                    "start_month": start_m,
+                    "end_month": end_m,
+                }
+            )
+        out[eng] = tasks
+    return out
+
+
+def _hc_task_field_keys(phase: str, slug: str, i: int) -> list[str]:
+    return [
+        f"hc_task_name_{phase}_{slug}_{i}",
+        f"hc_task_n_{phase}_{slug}_{i}",
+        f"hc_task_hc_{phase}_{slug}_{i}",
+        f"hc_task_dist_{phase}_{slug}_{i}",
+        f"hc_task_start_{phase}_{slug}_{i}",
+        f"hc_task_end_{phase}_{slug}_{i}",
+    ]
+
+
+def _bump_hc_task_count(phase: str, engineer: str) -> None:
+    key = _hc_task_count_key(phase, engineer)
+    new_i = int(st.session_state.get(key, 0) or 0)
+    st.session_state[key] = new_i + 1
+    slug = _hc_eng_slug(engineer)
+    st.session_state[f"hc_task_n_{phase}_{slug}_{new_i}"] = 1
+    st.session_state[f"hc_task_hc_{phase}_{slug}_{new_i}"] = 0.0
+    st.session_state[f"hc_task_dist_{phase}_{slug}_{new_i}"] = HC_DIST_PER_MONTH
+    st.session_state[f"hc_task_start_{phase}_{slug}_{new_i}"] = 1
+    st.session_state[f"hc_task_end_{phase}_{slug}_{new_i}"] = 1
+
+
+def _shrink_hc_task_count(phase: str, engineer: str) -> None:
+    key = _hc_task_count_key(phase, engineer)
+    n = int(st.session_state.get(key, 0) or 0)
+    if n <= 0:
+        return
+    _remove_hc_task_at(phase, engineer, n - 1)
+
+
+def _remove_hc_task_at(phase: str, engineer: str, index: int) -> None:
+    """Remove one task at index and shift later tasks down."""
+    key = _hc_task_count_key(phase, engineer)
+    n = int(st.session_state.get(key, 0) or 0)
+    if index < 0 or index >= n:
+        return
+    slug = _hc_eng_slug(engineer)
+    for j in range(index, n - 1):
+        src_keys = _hc_task_field_keys(phase, slug, j + 1)
+        dest_keys = _hc_task_field_keys(phase, slug, j)
+        for src, dest in zip(src_keys, dest_keys):
+            if src in st.session_state:
+                st.session_state[dest] = st.session_state[src]
+            else:
+                st.session_state.pop(dest, None)
+    for field in _hc_task_field_keys(phase, slug, n - 1):
+        st.session_state.pop(field, None)
+    st.session_state[key] = n - 1
 
 
 def _record_download(tool_type: str, **overrides) -> None:
@@ -456,8 +819,8 @@ else:
     convert_df = st.session_state.work_convert
     info_map = test_info_by_id(test_plan_df)
 
-    tab_plan, tab_nre, tab_hc = st.tabs(
-        ["Test Plan Timeline", "NRE Estimation", "Headcount Estimation"]
+    tab_plan, tab_nre_hc = st.tabs(
+        ["Test Plan Timeline", "NRE / Headcount"]
     )
 
 
@@ -468,13 +831,11 @@ else:
                 "TBD — NAOMI uses a different test-plan workflow "
                 "(not implemented yet)."
             )
-        with tab_nre:
-            st.subheader("NRE Estimation")
-            st.info("TBD — NAOMI NRE estimation is not implemented yet.")
-        with tab_hc:
-            st.subheader("Headcount Estimation")
+        with tab_nre_hc:
+            st.subheader("NRE / Headcount")
             st.info(
-                "TBD — NAOMI headcount estimation is not implemented yet."
+                "TBD — NAOMI NRE and headcount estimation are not "
+                "implemented yet."
             )
     else:
         # ============================= TEST PLAN ==================================
@@ -873,8 +1234,8 @@ else:
                         _record_download("TEST PLAN")
                         st.toast("Usage recorded · TEST PLAN")
 
-        # ============================= NRE ========================================
-        with tab_nre:
+        # ============================= NRE / HEADCOUNT ============================
+        with tab_nre_hc:
             st.subheader("NRE Estimation")
             st.caption(
                 "Select one or more testing phases. Fixture / rack USD costs are "
@@ -885,7 +1246,8 @@ else:
                 "Generated table matches `NRE_TEMPLATE_<account>.xlsx` "
                 "(Test Item · Location · Rate · Concept/BU/CT/BCT/NT/OT/NOT · "
                 "Sub Total). "
-                "**Sub Total** in Excel = `SUM(Concept:NOT) × Lab Rate`."
+                "**Sub Total** in Excel = `SUM(Concept:NOT) × Lab Rate`. "
+                "After **Generate NRE Table**, Headcount Estimation appears below."
             )
 
             if "nre_phases" not in st.session_state:
@@ -1115,10 +1477,28 @@ else:
                         location_df=location_df,
                         aux_costs=aux_costs,
                     )
+                    # Lock headcount phases + NRE hours used for duration tasks
+                    st.session_state.hc_phases = list(nre_phases)
+                    st.session_state.hc_nre_hours_by_phase = {
+                        str(cfg.get("phase", "")): _nre_phase_hours(
+                            cfg, info_map=info_map
+                        )
+                        for cfg in phase_configs
+                        if cfg.get("phase")
+                    }
+                    # Re-seed HC defaults so NRE duration tasks match this generate
+                    _clear_hc_default_seeds()
+                    # Clear previous headcount grid until user regenerates it
+                    st.session_state.hc_df = None
+                    st.session_state.hc_table_phases = None
+                    st.session_state.hc_table_months = None
+                    st.session_state.hc_table_tasks = None
 
             if st.session_state.nre_df is not None and not st.session_state.nre_df.empty:
                 nre_df = st.session_state.nre_df
-                selected_phases = sanitize_nre_phases(list(nre_phases))
+                selected_phases = sanitize_nre_phases(
+                    list(st.session_state.hc_phases or nre_phases)
+                )
                 nre_view = pivot_nre_for_template(
                     nre_df, phases=selected_phases
                 )
@@ -1157,14 +1537,294 @@ else:
                     _record_download("NRE", functional=nre_functional)
                     st.toast("Usage recorded · NRE")
 
-        # ============================= HEADCOUNT ==================================
-        with tab_hc:
-            st.subheader("Headcount Estimation")
-            st.info("TBD — placeholder for future headcount model.")
-            st.write(
-                "Planned inputs (not implemented yet): phase mix, system count, "
-                "lab shifts, and overlapping SoR / Gold Rail workload."
-            )
+                # ---------------- Headcount (after NRE generate) ----------------
+                st.divider()
+                st.subheader("Headcount Estimation")
+                hc_phases = sanitize_nre_phases(
+                    list(st.session_state.hc_phases or selected_phases)
+                )
+                # Backfill NRE hours if missing (e.g. session from before this feature)
+                if not st.session_state.get("hc_nre_hours_by_phase") and phase_configs:
+                    st.session_state.hc_nre_hours_by_phase = {
+                        str(cfg.get("phase", "")): _nre_phase_hours(
+                            cfg, info_map=info_map
+                        )
+                        for cfg in phase_configs
+                        if cfg.get("phase")
+                    }
+                    _clear_hc_default_seeds()
+                st.caption(
+                    "Phases follow the NRE testing-phase selection. "
+                    "Each phase has its own months and engineer task lists. "
+                    "**NRE Test Item Duration** = (Σ NRE hours ÷ 160) HeadCount "
+                    "per Person × **2** people — on Structure for Concept / BU / "
+                    "BCT, on S&V for CT / NT / OT / NOT. "
+                    "**Per Month** adds the total to every month; **Per Phase** "
+                    "divides across a selected start→end span. "
+                    "Task total = **Number of HeadCount × HeadCount per Person**."
+                )
+
+                hc_months: dict[str, int] = {}
+                tasks_by_phase: dict[str, dict[str, list[dict]]] = {}
+
+                for phase in hc_phases:
+                    st.divider()
+                    st.markdown(f"### {phase}")
+                    month_key = f"hc_months_{phase}"
+                    if month_key not in st.session_state:
+                        st.session_state[month_key] = _hc_month_default(phase)
+                    hc_months[phase] = int(
+                        st.number_input(
+                            f"{phase} — months",
+                            min_value=0,
+                            step=1,
+                            key=month_key,
+                            help=(
+                                "Default 6 months for BCT / NOT; "
+                                "3 months otherwise."
+                                if phase in ("BCT", "NOT")
+                                else "Default 3 months."
+                            ),
+                        )
+                    )
+
+                    for eng in HC_ENGINEER_TYPES:
+                        _seed_hc_engineer_defaults(phase, eng)
+                        slug = _hc_eng_slug(eng)
+                        n_key = _hc_task_count_key(phase, eng)
+                        with st.expander(eng, expanded=False):
+                            n_tasks = int(st.session_state.get(n_key, 0) or 0)
+                            if n_tasks == 0:
+                                st.caption(
+                                    "No tasks yet — add a task to enter "
+                                    "headcount and distribution."
+                                )
+                            phase_months = max(int(hc_months.get(phase, 0) or 0), 0)
+                            month_opts = list(range(1, phase_months + 1)) if phase_months else [1]
+                            for i in range(n_tasks):
+                                hdr_l, hdr_r = st.columns([5, 1])
+                                with hdr_l:
+                                    st.markdown(f"**Task {i + 1}**")
+                                with hdr_r:
+                                    st.button(
+                                        "Remove task",
+                                        key=f"hc_rm_task_{phase}_{slug}_{i}",
+                                        use_container_width=True,
+                                        on_click=_remove_hc_task_at,
+                                        args=(phase, eng, i),
+                                    )
+                                t1, t2, t3 = st.columns([3, 2, 2])
+                                with t1:
+                                    st.text_input(
+                                        "Task",
+                                        key=f"hc_task_name_{phase}_{slug}_{i}",
+                                        placeholder="Task name",
+                                    )
+                                with t2:
+                                    st.number_input(
+                                        "Number of HeadCount",
+                                        min_value=0,
+                                        step=1,
+                                        key=f"hc_task_n_{phase}_{slug}_{i}",
+                                        help="Default 1. Multiplied by HeadCount per Person.",
+                                    )
+                                with t3:
+                                    st.number_input(
+                                        "HeadCount per Person",
+                                        min_value=0.0,
+                                        step=0.1,
+                                        format="%.2f",
+                                        key=f"hc_task_hc_{phase}_{slug}_{i}",
+                                        help=(
+                                            "Total for this task = Number of "
+                                            "HeadCount × HeadCount per Person."
+                                        ),
+                                    )
+                                dist_key = f"hc_task_dist_{phase}_{slug}_{i}"
+                                start_key = f"hc_task_start_{phase}_{slug}_{i}"
+                                end_key = f"hc_task_end_{phase}_{slug}_{i}"
+                                # Clamp start/end to current phase month list
+                                if start_key not in st.session_state:
+                                    st.session_state[start_key] = month_opts[0]
+                                if end_key not in st.session_state:
+                                    st.session_state[end_key] = month_opts[-1]
+                                if st.session_state[start_key] not in month_opts:
+                                    st.session_state[start_key] = month_opts[0]
+                                if st.session_state[end_key] not in month_opts:
+                                    st.session_state[end_key] = month_opts[-1]
+                                if (
+                                    st.session_state[end_key]
+                                    < st.session_state[start_key]
+                                ):
+                                    st.session_state[end_key] = st.session_state[
+                                        start_key
+                                    ]
+
+                                dist_val = st.session_state.get(
+                                    dist_key, HC_DIST_PER_MONTH
+                                )
+                                if dist_val == HC_DIST_PER_PHASE:
+                                    d1, d2, d3 = st.columns([2, 2, 2])
+                                    with d1:
+                                        st.selectbox(
+                                            "Distribute",
+                                            HC_DISTRIBUTION_OPTS,
+                                            key=dist_key,
+                                            help=(
+                                                "Per Month: add task total to "
+                                                "each month. Per Phase: divide "
+                                                "total by (end−start+1) and put "
+                                                "only in that month span."
+                                            ),
+                                        )
+                                    with d2:
+                                        st.selectbox(
+                                            "Start month",
+                                            month_opts,
+                                            key=start_key,
+                                            help=(
+                                                f"First month within {phase} "
+                                                f"(1…{phase_months or 1})."
+                                            ),
+                                        )
+                                    with d3:
+                                        st.selectbox(
+                                            "End month",
+                                            month_opts,
+                                            key=end_key,
+                                            help=(
+                                                "Last month within this phase "
+                                                "(must be ≥ start). Same as start "
+                                                "for a 1-month task."
+                                            ),
+                                        )
+                                    sm = int(st.session_state.get(start_key, 1) or 1)
+                                    em = int(st.session_state.get(end_key, sm) or sm)
+                                    if em < sm:
+                                        st.caption(
+                                            f"End month ({em}) is before start "
+                                            f"({sm}) — table will use {sm}…{sm}."
+                                        )
+                                    else:
+                                        span = em - sm + 1
+                                        st.caption(
+                                            f"Per Phase: total ÷ **{span}** → "
+                                            f"months **{sm}–{em}** of {phase} only."
+                                        )
+                                else:
+                                    st.selectbox(
+                                        "Distribute",
+                                        HC_DISTRIBUTION_OPTS,
+                                        key=dist_key,
+                                        help=(
+                                            "Per Month: add task total to "
+                                            "each month. Per Phase: divide "
+                                            "across selected start→end months."
+                                        ),
+                                    )
+                            st.button(
+                                "Add task",
+                                key=f"hc_add_task_{phase}_{slug}",
+                                on_click=_bump_hc_task_count,
+                                args=(phase, eng),
+                            )
+
+                    tasks_by_phase[phase] = _collect_hc_tasks_for_phase(
+                        phase, n_months=int(hc_months.get(phase, 0) or 0)
+                    )
+
+                st.session_state.hc_months = hc_months
+                st.session_state.hc_tasks_by_phase = tasks_by_phase
+
+                st.divider()
+                st.markdown("##### Generate table")
+                disp_c1, disp_c2 = st.columns(2)
+                with disp_c1:
+                    if "hc_month_display" not in st.session_state:
+                        st.session_state.hc_month_display = HC_SHOW_SEQUENCE
+                    hc_month_display = st.selectbox(
+                        "Month display",
+                        HC_MONTH_DISPLAY_OPTS,
+                        key="hc_month_display",
+                        help=(
+                            "Show in sequence: Month row is 1, 2, 3, …. "
+                            "Show in month: Month row is Jan–Dec names from "
+                            "Project Start Month."
+                        ),
+                    )
+                with disp_c2:
+                    hc_project_start = "Jan"
+                    if hc_month_display == HC_SHOW_MONTH:
+                        if "hc_project_start_month" not in st.session_state:
+                            st.session_state.hc_project_start_month = "Jan"
+                        hc_project_start = st.selectbox(
+                            "Project Start Month",
+                            HC_CALENDAR_MONTHS,
+                            key="hc_project_start_month",
+                            help=(
+                                "First calendar month on the headcount timeline. "
+                                "E.g. Jun → Jun, Jul, Aug, …"
+                            ),
+                        )
+                hc_generate = st.button(
+                    "Generate Headcount Table",
+                    type="primary",
+                    key="hc_generate_btn",
+                )
+
+                if hc_generate:
+                    if not hc_phases:
+                        st.error("No testing phases available for headcount.")
+                    elif sum(int(hc_months.get(p, 0) or 0) for p in hc_phases) <= 0:
+                        st.error("Enter at least one month across the phases.")
+                    else:
+                        st.session_state.hc_df = build_headcount_table(
+                            hc_phases,
+                            hc_months,
+                            tasks_by_phase=tasks_by_phase,
+                            month_display=hc_month_display,
+                            project_start_month=hc_project_start,
+                        )
+                        st.session_state.hc_table_phases = list(hc_phases)
+                        st.session_state.hc_table_months = dict(hc_months)
+                        st.session_state.hc_table_tasks = tasks_by_phase
+                        st.session_state.hc_table_month_display = hc_month_display
+                        st.session_state.hc_table_project_start = hc_project_start
+
+                if (
+                    st.session_state.hc_df is not None
+                    and not st.session_state.hc_df.empty
+                ):
+                    disp = st.session_state.get(
+                        "hc_table_month_display", HC_SHOW_SEQUENCE
+                    )
+                    start_lbl = st.session_state.get(
+                        "hc_table_project_start", "Jan"
+                    )
+                    if disp == HC_SHOW_MONTH:
+                        mode_note = (
+                            f"Month row = calendar names from **{start_lbl}**."
+                        )
+                    else:
+                        mode_note = "Month row = sequence **1, 2, 3, …**."
+                    st.caption(
+                        "Headcount grid (template layout): Phase / Month / "
+                        "engineer rows + Comments. "
+                        f"{mode_note} "
+                        "**Per Phase** tasks only fill the selected start→end "
+                        "months (total ÷ duration). "
+                        "Regenerates only when you click **Generate Headcount Table**."
+                    )
+                    st.dataframe(
+                        st.session_state.hc_df,
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+                else:
+                    st.caption(
+                        "Configure phase months and engineer tasks above, then "
+                        "click **Generate Headcount Table**."
+                    )
 
 # ---------------------------------------------------------------------------
 # Data preview / edit (end of page, collapsed by default)

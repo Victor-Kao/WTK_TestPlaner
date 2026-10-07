@@ -8,6 +8,42 @@ DATA_DIR = ROOT / "data"
 ACCOUNTS = ["ROSA", "NAOMI"]
 # NRE testing phases. BCT is mutually exclusive with BU/CT; NOT with NT/OT.
 PHASES = ["Concept", "BU", "CT", "BCT", "NT", "OT", "NOT"]
+# Headcount: months per testing phase (BCT/NOT are combined phases → 6)
+HC_MONTH_DEFAULTS = {
+    "Concept": 3,
+    "BU": 3,
+    "CT": 3,
+    "BCT": 6,
+    "NT": 3,
+    "OT": 3,
+    "NOT": 6,
+}
+# Headcount grid engineer rows (matches HEADCOUNT_TEMPLATE_*.xlsx)
+HC_ENGINEER_TYPES = (
+    "Structure Engineer",
+    "CAE Engineer",
+    "S&V Engineer",
+)
+HC_DIST_PER_MONTH = "Per Month"
+HC_DIST_PER_PHASE = "Per Phase"
+HC_DISTRIBUTION_OPTS = (HC_DIST_PER_MONTH, HC_DIST_PER_PHASE)
+HC_SHOW_SEQUENCE = "Show in sequence"
+HC_SHOW_MONTH = "Show in month"
+HC_MONTH_DISPLAY_OPTS = (HC_SHOW_SEQUENCE, HC_SHOW_MONTH)
+HC_CALENDAR_MONTHS = (
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec",
+)
 PROJECT_PHASES = ["C0", "C1", "C2", "C3", "C4", "C5", "C6"]  # setup project phase
 FUNCTIONALITY_OPTS = ["Functional", "Non-functional"]
 YES_NO = ["Yes", "No"]
@@ -98,9 +134,15 @@ def account_paths(account: str) -> dict[str, Path]:
         "convert_table": base / "convert_table.csv",
         "sequence_xlsx": base / "test_item_sequence_all_cases.xlsx",
         "nre_template": base / f"NRE_TEMPLATE_{account}.xlsx",
+        "headcount_template": base / f"HEADCOUNT_TEMPLATE_{account}.xlsx",
     }
 
 
 def nre_template_path(account: str) -> Path:
     """Per-account NRE workbook: data/<account>/NRE_TEMPLATE_<account>.xlsx."""
     return account_paths(account)["nre_template"]
+
+
+def headcount_template_path(account: str) -> Path:
+    """Per-account headcount workbook: data/<account>/HEADCOUNT_TEMPLATE_<account>.xlsx."""
+    return account_paths(account)["headcount_template"]
