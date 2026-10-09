@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from io import BytesIO
 from typing import Any
 
 import pandas as pd
+from openpyxl.styles import Alignment, PatternFill
+from openpyxl.utils import get_column_letter
 
 from modules.config import (
     HC_CALENDAR_MONTHS,
@@ -24,8 +27,10 @@ __all__ = [
     "HC_SHOW_SEQUENCE",
     "allocate_task_headcount",
     "build_headcount_table",
+    "build_headcount_detail_table",
     "compute_engineer_month_values",
     "calendar_month_labels",
+    "export_headcount_xlsx",
 ]
 
 
@@ -153,13 +158,10 @@ def compute_engineer_month_values(
                     if abs(share) > 1e-15:
                         totals[eng][start + offset] += share
 
-    # Blank cells stay None when the engineer has no value that month;
-    # otherwise round the summed total to 1 decimal.
+    # Round monthly totals to 1 decimal; keep 0 (not None) when HC is zero.
     out: dict[str, list[Any]] = {}
     for eng in HC_ENGINEER_TYPES:
-        out[eng] = [
-            (_round_headcount(v) if abs(v) > 1e-12 else None) for v in totals[eng]
-        ]
+        out[eng] = [_round_headcount(v) for v in totals[eng]]
     return out
 
 
@@ -257,10 +259,9 @@ def build_headcount_table(
         for i in range(len(month_seq)):
             raw = vals[i] if i < len(vals) else None
             if raw is None or (isinstance(raw, float) and pd.isna(raw)):
-                out.append(None)
+                out.append(0.0)
             else:
-                v = float(raw)
-                out.append(_round_headcount(v) if abs(v) > 1e-12 else None)
+                out.append(_round_headcount(float(raw)))
         return out
 
     data: dict[str, list[Any]] = {
@@ -275,3 +276,121 @@ def build_headcount_table(
     data[comments_col] = [_comment_for(lbl) for lbl in row_labels]
 
     return pd.DataFrame(data)[[label_col, *col_keys, comments_col]]
+
+
+def _format_hc_detail_task(task: dict[str, Any], *, index: int) -> str:
+    """
+    One computation line, e.g.
+      1. "Regular Meeting / Discussion": 1x  0.1 HC / Manpower (per Month)
+    """
+    name = str(task.get("task") or f"Task {index}").strip() or f"Task {index}"
+    n_hc = int(task.get("number_of_headcount") or 0)
+    if "headcount_per_person" in task:
+        per = float(task.get("headcount_per_person") or 0)
+    elif n_hc > 0:
+        per = float(task.get("headcount") or 0) / n_hc
+    else:
+        per = float(task.get("headcount") or 0)
+    per_disp = f"{_round_headcount(per):.1f}"
+    dist = str(task.get("distribution") or HC_DIST_PER_MONTH).strip()
+    if dist == HC_DIST_PER_PHASE:
+        dist_label = "per Phase"
+    else:
+        dist_label = "per Month"
+    return (
+        f'{index}. "{name}": {n_hc}x  {per_disp} HC / Manpower ({dist_label})'
+    )
+
+
+def build_headcount_detail_table(
+    phases: list[str],
+    tasks_by_phase: dict[str, dict[str, list[dict[str, Any]]]] | None = None,
+) -> pd.DataFrame:
+    """
+    Detail how headcount is computed — one row per phase; tasks stacked
+    as separate lines in each engineer cell:
+
+      Phase | Structure Engineer | CAE Engineer | S&V Engineer
+      Concept | 1. "Task A": …\\n2. "Task B": … | … | …
+      BU | 1. "…" | … | …
+    """
+    ordered = [p for p in PHASES if p in {str(x) for x in phases}]
+    if not ordered:
+        ordered = [str(p) for p in phases]
+
+    tasks_map = tasks_by_phase or {}
+    rows: list[dict[str, Any]] = []
+    for phase in ordered:
+        eng_tasks = tasks_map.get(phase) or {}
+        row: dict[str, Any] = {"Phase": phase}
+        for eng in HC_ENGINEER_TYPES:
+            tasks = list(eng_tasks.get(eng) or [])
+            if not tasks:
+                row[eng] = ""
+            else:
+                row[eng] = "\n".join(
+                    _format_hc_detail_task(t, index=i + 1)
+                    for i, t in enumerate(tasks)
+                )
+        rows.append(row)
+
+    cols = ["Phase", *HC_ENGINEER_TYPES]
+    return pd.DataFrame(rows, columns=cols) if rows else pd.DataFrame(columns=cols)
+
+
+def export_headcount_xlsx(
+    hc_df: pd.DataFrame,
+    detail_df: pd.DataFrame | None = None,
+) -> bytes:
+    """
+    Export headcount grid + computation detail as one workbook:
+      Sheet "Headcount" — monthly HC table
+      Sheet "Detail" — per-phase task formulas (newlines preserved)
+    Light grey fill on Headcount Phase/Month rows and Detail header row.
+    """
+    fill_grey = PatternFill(
+        start_color="D9D9D9", end_color="D9D9D9", fill_type="solid"
+    )
+    buf = BytesIO()
+    hc = hc_df if hc_df is not None else pd.DataFrame()
+    detail = detail_df if detail_df is not None else pd.DataFrame()
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        hc.to_excel(writer, sheet_name="Headcount", index=False)
+        detail.to_excel(writer, sheet_name="Detail", index=False)
+        wb = writer.book
+        # Headcount: modest column widths + grey Phase / Month rows
+        ws_hc = wb["Headcount"]
+        for col_idx in range(1, ws_hc.max_column + 1):
+            letter = get_column_letter(col_idx)
+            ws_hc.column_dimensions[letter].width = 14 if col_idx > 1 else 22
+        for r in range(1, ws_hc.max_row + 1):
+            label = str(ws_hc.cell(r, 1).value or "").strip()
+            if label in ("Phase", "Month"):
+                for c in range(1, ws_hc.max_column + 1):
+                    ws_hc.cell(r, c).fill = fill_grey
+        # Detail: wrap multiline task cells; grey header row
+        ws_d = wb["Detail"]
+        wrap = Alignment(wrap_text=True, vertical="top")
+        for row in ws_d.iter_rows(
+            min_row=1,
+            max_row=ws_d.max_row,
+            max_col=ws_d.max_column,
+        ):
+            for cell in row:
+                cell.alignment = wrap
+        if ws_d.max_row >= 1:
+            for c in range(1, ws_d.max_column + 1):
+                ws_d.cell(1, c).fill = fill_grey
+        ws_d.column_dimensions["A"].width = 12
+        for col_idx in range(2, ws_d.max_column + 1):
+            ws_d.column_dimensions[get_column_letter(col_idx)].width = 48
+        for r in range(2, ws_d.max_row + 1):
+            # Grow row height for multiline cells
+            max_lines = 1
+            for col_idx in range(1, ws_d.max_column + 1):
+                val = ws_d.cell(r, col_idx).value
+                if val is None:
+                    continue
+                max_lines = max(max_lines, str(val).count("\n") + 1)
+            ws_d.row_dimensions[r].height = max(18.0, 15.0 * max_lines + 6.0)
+    return buf.getvalue()

@@ -8,15 +8,33 @@ DATA_DIR = ROOT / "data"
 ACCOUNTS = ["ROSA", "NAOMI"]
 # NRE testing phases. BCT is mutually exclusive with BU/CT; NOT with NT/OT.
 PHASES = ["Concept", "BU", "CT", "BCT", "NT", "OT", "NOT"]
-# Headcount: months per testing phase (BCT/NOT are combined phases → 6)
+# Default selected testing phases (BCT / NOT off — exclusive alternatives)
+NRE_DEFAULT_PHASES = ["Concept", "BU", "CT", "NT", "OT"]
+# Phases kept in NRE/HC listing but default to no test items and U-fit qty 0
+NRE_EMPTY_CONTENT_DEFAULT_PHASES = frozenset({"OT"})
+# Per-phase NRE defaults: (Functionality, Gold Rail Yes/No)
+# Concept/CT: Non-functional, no Gold rail
+# BU/BCT: Non-functional, Gold rail
+# NT/OT/NOT: Functional, no Gold rail
+NRE_PHASE_OPTION_DEFAULTS: dict[str, tuple[str, str]] = {
+    "Concept": ("Non-functional", "No"),
+    "BU": ("Non-functional", "Yes"),
+    "CT": ("Non-functional", "No"),
+    "BCT": ("Non-functional", "Yes"),
+    "NT": ("Functional", "No"),
+    "OT": ("Functional", "No"),
+    "NOT": ("Functional", "No"),
+}
+# Headcount: months per testing phase
+# Concept / BCT / NOT → 3; BU / CT / NT / OT → 2
 HC_MONTH_DEFAULTS = {
     "Concept": 3,
-    "BU": 3,
-    "CT": 3,
-    "BCT": 6,
-    "NT": 3,
-    "OT": 3,
-    "NOT": 6,
+    "BU": 2,
+    "CT": 2,
+    "BCT": 3,
+    "NT": 2,
+    "OT": 2,
+    "NOT": 3,
 }
 # Headcount grid engineer rows (matches HEADCOUNT_TEMPLATE_*.xlsx)
 HC_ENGINEER_TYPES = (

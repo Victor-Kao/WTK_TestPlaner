@@ -6,6 +6,7 @@ Main-page layout only (no sidebar) so a parent tool can own the sidebar.
 """
 from __future__ import annotations
 
+import html
 from datetime import date, timedelta
 
 import pandas as pd
@@ -29,13 +30,15 @@ from modules.config import (
     HC_SHOW_SEQUENCE,
     NRE_AUX_COST_DEFAULTS_USD,
     NRE_AUX_COST_IDS,
+    NRE_DEFAULT_PHASES,
     NRE_DNP_ID,
+    NRE_EMPTY_CONTENT_DEFAULT_PHASES,
     NRE_OM_ID,
+    NRE_PHASE_OPTION_DEFAULTS,
     NRE_SELECTOR_EXTRA_IDS,
     NRE_UFIT_ID,
     ORV3_MGX_WO_L11_COL,
     ORV3_MGX_WO_L11_LABEL,
-    PHASES,
     PROJECT_PHASES,
     SEQUENCE_TEMPLATE_MAX_SYSTEMS,
     STANDARDS,
@@ -52,7 +55,11 @@ from modules.data_loader import (
     test_detail_by_id,
     test_info_by_id,
 )
-from modules.headcount import build_headcount_table
+from modules.headcount import (
+    build_headcount_detail_table,
+    build_headcount_table,
+    export_headcount_xlsx,
+)
 from modules.nre import (
     aux_costs_have_content,
     available_nre_phases,
@@ -101,7 +108,9 @@ def _init_state() -> None:
         "nre_df": None,
         "hc_phases": None,
         "hc_nre_hours_by_phase": None,
+        "hc_nre_func_by_phase": None,
         "hc_df": None,
+        "hc_detail_df": None,
         "hc_table_phases": None,
         "hc_table_months": None,
         "last_convert_id": None,
@@ -318,7 +327,9 @@ def _clear_plan_work() -> None:
     st.session_state.nre_df = None
     st.session_state.hc_phases = None
     st.session_state.hc_nre_hours_by_phase = None
+    st.session_state.hc_nre_func_by_phase = None
     st.session_state.hc_df = None
+    st.session_state.hc_detail_df = None
     st.session_state.hc_table_phases = None
     st.session_state.hc_table_months = None
     st.session_state.plan_log_context = None
@@ -345,17 +356,41 @@ def _hc_task_count_key(phase: str, engineer: str) -> str:
     return f"hc_ntasks_{phase}_{_hc_eng_slug(engineer)}"
 
 
-# Bump when Structure / S&V default task lists change (forces re-seed once).
-_HC_DEFAULTS_SEED_VERSION = 8
-_HC_NRE_DURATION_TASK = "NRE Test Item Duration"
+# Bump when Structure / S&V / CAE default task lists change (forces re-seed once).
+_HC_DEFAULTS_SEED_VERSION = 15
+_HC_NRE_DURATION_TASK = "S&V Test"
+_HC_BASELINE_TASK = "Baseline"
 _HC_NRE_HOURS_PER_PERSON = 160.0  # lab hours → 1.0 HeadCount per Person
+_HC_NRE_DURATION_STRUCTURE_PEOPLE = 2
+_HC_NRE_DURATION_SV_PEOPLE = 3
+_HC_SV_BASELINE_PEOPLE = 3
+# System weight > 91 kg (~200 lbs) → +1 Number of HeadCount on NRE Duration
+# (Structure + S&V) and S&V Baseline.
+_HC_HEAVY_WEIGHT_KG = 91.0
 _HC_NRE_DURATION_STRUCTURE_PHASES = frozenset({"Concept", "BU", "BCT"})
 _HC_NRE_DURATION_SV_PHASES = frozenset({"CT", "NT", "OT", "NOT"})
+# S&V Baseline only when that phase has NRE test hours (CT → NT/OT/NOT)
+_HC_SV_BASELINE_PHASES = frozenset({"CT", "NT", "OT", "NOT"})
+_HC_CAE_OVERALL_RISK_PHASES = frozenset({"BU", "BCT"})
+_HC_CAE_PRELIM_TASK = "Simulation - Preliminary Risk Assessment"
+_HC_CAE_OVERALL_TASK = "Simulation - Overall Risk Assessment"
+_HC_CAE_ISSUE_TASK = "Simulation - Issue Analysis"
 
 
 def _hc_task_total(number_of_headcount: int, headcount_per_person: float) -> float:
     """Total task headcount = Number of HeadCount × HeadCount per Person."""
     return float(number_of_headcount or 0) * float(headcount_per_person or 0)
+
+
+def _hc_weight_people_bonus(weight_kg: float | None = None) -> int:
+    """+1 Number of HeadCount when system weight is over 91 kg (200 lbs)."""
+    w = weight_kg
+    if w is None:
+        w = st.session_state.get("started_weight_kg")
+    try:
+        return 1 if float(w or 0) > _HC_HEAVY_WEIGHT_KG else 0
+    except (TypeError, ValueError):
+        return 0
 
 
 def _nre_phase_hours(
@@ -385,20 +420,34 @@ def _nre_phase_hours(
     return hours
 
 
-def _nre_duration_task(hours: float) -> dict | None:
+def _nre_duration_task(
+    hours: float, *, number_of_headcount: int = _HC_NRE_DURATION_STRUCTURE_PEOPLE
+) -> dict | None:
     """
-    NRE hours → HeadCount per Person = hours / 160, Number of HeadCount = 2.
-    Example: 16 h → 0.1 per person × 2 people.
+    NRE hours → HeadCount per Person = hours / 160.
+    Structure default people = 2; S&V default people = 3.
+    Example: 16 h → 0.1 per person × N people.
     """
     h = float(hours or 0)
     if h <= 0:
         return None
     return {
         "task": _HC_NRE_DURATION_TASK,
-        "number_of_headcount": 2,
+        "number_of_headcount": int(number_of_headcount),
         "headcount_per_person": round(h / _HC_NRE_HOURS_PER_PERSON, 6),
         "distribution": HC_DIST_PER_PHASE,
     }
+
+
+def _phase_has_sv_test_task(phase: str, nre_hours: float) -> bool:
+    """True when Structure or S&V would get an S&V Test task in this phase."""
+    p = str(phase)
+    if float(nre_hours or 0) <= 0:
+        return False
+    return (
+        p in _HC_NRE_DURATION_STRUCTURE_PHASES
+        or p in _HC_NRE_DURATION_SV_PHASES
+    )
 
 
 def _clear_hc_default_seeds() -> None:
@@ -408,7 +457,12 @@ def _clear_hc_default_seeds() -> None:
             del st.session_state[k]
 
 
-def _structure_default_tasks(phase: str, *, nre_hours: float = 0.0) -> list[dict]:
+def _structure_default_tasks(
+    phase: str,
+    *,
+    nre_hours: float = 0.0,
+    people_bonus: int = 0,
+) -> list[dict]:
     """
     Structure Engineer defaults (number_of_headcount=1 unless noted):
       All phases: Regular Meeting / Discussion — 0.1 per person Per Month
@@ -418,8 +472,10 @@ def _structure_default_tasks(phase: str, *, nre_hours: float = 0.0) -> list[dict
       BU / CT (split of BCT): same tasks at BU:CT = 2:1
       NOT: Issue Analysis & Discussion — 1 per person Per Phase
       NT / OT (split of NOT): same task at NT:OT = 1:1 (0.5 each)
-      Concept / BU / BCT: NRE Test Item Duration — (Σ hours / 160) per person × 2
+      Concept / BU / BCT: S&V Test — (Σ hours / 160) × (2 + heavy)
     """
+    bonus = max(int(people_bonus or 0), 0)
+
     def _task(
         name: str,
         per_person: float,
@@ -473,18 +529,94 @@ def _structure_default_tasks(phase: str, *, nre_hours: float = 0.0) -> list[dict
         tasks.append(_task("Issue Analysis & Discussion", 0.5, HC_DIST_PER_PHASE))
 
     if p in _HC_NRE_DURATION_STRUCTURE_PHASES:
-        nre_task = _nre_duration_task(nre_hours)
+        nre_task = _nre_duration_task(
+            nre_hours,
+            number_of_headcount=_HC_NRE_DURATION_STRUCTURE_PEOPLE + bonus,
+        )
         if nre_task:
             tasks.append(nre_task)
     return tasks
 
 
-def _sv_default_tasks(phase: str, *, nre_hours: float = 0.0) -> list[dict]:
+def _cae_default_tasks(
+    phase: str,
+    *,
+    nre_hours: float = 0.0,
+) -> list[dict]:
+    """
+    CAE Engineer defaults:
+      Concept only: Simulation - Preliminary Risk Assessment — 1 × 1.0 Per Phase
+      BU / BCT: Simulation - Overall Risk Assessment — 1 × 3.0 Per Phase
+      Any phase with Structure/S&V S&V Test: Simulation - Issue Analysis
+        — 1 × 0.2 Per Phase
+    """
+    p = str(phase)
+    tasks: list[dict] = []
+    if p == "Concept":
+        tasks.append(
+            {
+                "task": _HC_CAE_PRELIM_TASK,
+                "number_of_headcount": 1,
+                "headcount_per_person": 1.0,
+                "distribution": HC_DIST_PER_PHASE,
+            }
+        )
+    elif p in _HC_CAE_OVERALL_RISK_PHASES:
+        tasks.append(
+            {
+                "task": _HC_CAE_OVERALL_TASK,
+                "number_of_headcount": 1,
+                "headcount_per_person": 3.0,
+                "distribution": HC_DIST_PER_PHASE,
+            }
+        )
+    if _phase_has_sv_test_task(p, nre_hours):
+        tasks.append(
+            {
+                "task": _HC_CAE_ISSUE_TASK,
+                "number_of_headcount": 1,
+                "headcount_per_person": 0.2,
+                "distribution": HC_DIST_PER_PHASE,
+            }
+        )
+    return tasks
+
+
+def _sv_baseline_task(functionality: str, *, people_bonus: int = 0) -> dict:
+    """
+    Baseline for S&V when the phase has NRE test content:
+      Functional → (3+heavy) × 0.25 Per Phase
+      Non-functional → (3+heavy) × 0.1 Per Phase
+    """
+    per = (
+        0.25
+        if str(functionality or "").strip() == "Functional"
+        else 0.1
+    )
+    return {
+        "task": _HC_BASELINE_TASK,
+        "number_of_headcount": _HC_SV_BASELINE_PEOPLE + max(int(people_bonus or 0), 0),
+        "headcount_per_person": per,
+        "distribution": HC_DIST_PER_PHASE,
+    }
+
+
+def _sv_default_tasks(
+    phase: str,
+    *,
+    nre_hours: float = 0.0,
+    functionality: str = "Functional",
+    people_bonus: int = 0,
+) -> list[dict]:
     """
     S&V defaults:
       Regular Meeting / Discussion — 0.1 per person Per Month (except Concept)
-      CT / NT / OT / NOT: NRE Test Item Duration — (Σ hours / 160) × 2 people
+      CT / NT / OT / NOT: Baseline only if that phase has NRE test hours —
+        Functional (3+heavy)×0.25, Non-functional (3+heavy)×0.1 Per Phase
+        (NT and OT each get their own Baseline when each has tests)
+      CT / NT / OT / NOT: S&V Test — (Σ hours / 160) × (3+heavy)
     """
+    bonus = max(int(people_bonus or 0), 0)
     tasks: list[dict] = []
     p = str(phase)
     if p != "Concept":
@@ -496,8 +628,13 @@ def _sv_default_tasks(phase: str, *, nre_hours: float = 0.0) -> list[dict]:
                 "distribution": HC_DIST_PER_MONTH,
             }
         )
+    if p in _HC_SV_BASELINE_PHASES and float(nre_hours or 0) > 0:
+        tasks.append(_sv_baseline_task(functionality, people_bonus=bonus))
     if p in _HC_NRE_DURATION_SV_PHASES:
-        nre_task = _nre_duration_task(nre_hours)
+        nre_task = _nre_duration_task(
+            nre_hours,
+            number_of_headcount=_HC_NRE_DURATION_SV_PEOPLE + bonus,
+        )
         if nre_task:
             tasks.append(nre_task)
     return tasks
@@ -508,16 +645,34 @@ def _seed_hc_engineer_defaults(phase: str, engineer: str) -> None:
     n_key = _hc_task_count_key(phase, engineer)
     slug = _hc_eng_slug(engineer)
     ver_key = f"_hc_defaults_ver_{phase}_{slug}"
-    if st.session_state.get(ver_key) == _HC_DEFAULTS_SEED_VERSION:
+    people_bonus = _hc_weight_people_bonus()
+    # Version tuple includes heavy-weight bonus so crossing 91 kg re-seeds.
+    seed_stamp = (_HC_DEFAULTS_SEED_VERSION, int(people_bonus))
+    if st.session_state.get(ver_key) == seed_stamp:
         return
 
     nre_hours = float(
         (st.session_state.get("hc_nre_hours_by_phase") or {}).get(phase, 0) or 0
     )
+    functionality = str(
+        (st.session_state.get("hc_nre_func_by_phase") or {}).get(
+            phase, "Functional"
+        )
+        or "Functional"
+    )
     if engineer == "Structure Engineer":
-        defaults = _structure_default_tasks(phase, nre_hours=nre_hours)
+        defaults = _structure_default_tasks(
+            phase, nre_hours=nre_hours, people_bonus=people_bonus
+        )
+    elif engineer == "CAE Engineer":
+        defaults = _cae_default_tasks(phase, nre_hours=nre_hours)
     elif engineer == "S&V Engineer":
-        defaults = _sv_default_tasks(phase, nre_hours=nre_hours)
+        defaults = _sv_default_tasks(
+            phase,
+            nre_hours=nre_hours,
+            functionality=functionality,
+            people_bonus=people_bonus,
+        )
     else:
         defaults = []
 
@@ -546,7 +701,7 @@ def _seed_hc_engineer_defaults(phase: str, engineer: str) -> None:
             )
         )
         st.session_state[f"hc_task_end_{phase}_{slug}_{i}"] = default_end
-    st.session_state[ver_key] = _HC_DEFAULTS_SEED_VERSION
+    st.session_state[ver_key] = seed_stamp
 
 
 def _collect_hc_tasks_for_phase(
@@ -629,6 +784,44 @@ def _hc_task_field_keys(phase: str, slug: str, i: int) -> list[str]:
     ]
 
 
+def _render_hc_detail_table(df: pd.DataFrame) -> None:
+    """
+    Show HC detail with task lines visible (st.dataframe collapses \\n until expand).
+    """
+    if df is None or df.empty:
+        return
+    cols = list(df.columns)
+    ths = "".join(
+        f"<th style='text-align:left;padding:8px 10px;border:1px solid "
+        f"#d0d7de;background:#f6f8fa;white-space:nowrap;'>{html.escape(str(c))}</th>"
+        for c in cols
+    )
+    body_rows: list[str] = []
+    for _, rec in df.iterrows():
+        tds: list[str] = []
+        for c in cols:
+            raw = rec.get(c, "")
+            if raw is None or (isinstance(raw, float) and pd.isna(raw)):
+                text = ""
+            else:
+                text = str(raw)
+            cell = html.escape(text).replace("\n", "<br>")
+            tds.append(
+                "<td style='text-align:left;padding:8px 10px;border:1px solid "
+                "#d0d7de;vertical-align:top;white-space:pre-line;'>"
+                f"{cell}</td>"
+            )
+        body_rows.append("<tr>" + "".join(tds) + "</tr>")
+    table_html = (
+        "<div style='overflow-x:auto;width:100%;'>"
+        "<table style='border-collapse:collapse;width:100%;font-size:0.92rem;'>"
+        f"<thead><tr>{ths}</tr></thead>"
+        f"<tbody>{''.join(body_rows)}</tbody>"
+        "</table></div>"
+    )
+    st.markdown(table_html, unsafe_allow_html=True)
+
+
 def _bump_hc_task_count(phase: str, engineer: str) -> None:
     key = _hc_task_count_key(phase, engineer)
     new_i = int(st.session_state.get(key, 0) or 0)
@@ -670,11 +863,23 @@ def _remove_hc_task_at(phase: str, engineer: str, index: int) -> None:
 
 
 def _record_download(tool_type: str, **overrides) -> None:
-    """Write a usage-log row for TEST PLAN / NRE / HC downloads."""
+    """Write a usage-log row for TEST PLAN / NRE / HC downloads.
+
+    NRE and HC log only Account / Project / Weight; TEST PLAN logs full context.
+    """
     ctx = dict(st.session_state.get("plan_log_context") or {})
     ctx.update({k: v for k, v in overrides.items() if v is not None})
+    tool = str(tool_type or "").strip()
+    if tool in ("NRE", "HC"):
+        append_usage_record(
+            tool_type=tool,
+            account=ctx.get("account", ""),
+            project=ctx.get("project", ""),
+            weight=ctx.get("weight", ""),
+        )
+        return
     append_usage_record(
-        tool_type=tool_type,
+        tool_type=tool,
         account=ctx.get("account", ""),
         project=ctx.get("project", ""),
         phase=ctx.get("phase", ""),
@@ -1250,8 +1455,9 @@ else:
                 "After **Generate NRE Table**, Headcount Estimation appears below."
             )
 
+            _nre_default_phases = sanitize_nre_phases(list(NRE_DEFAULT_PHASES))
             if "nre_phases" not in st.session_state:
-                st.session_state.nre_phases = [PHASES[0]]
+                st.session_state.nre_phases = list(_nre_default_phases)
             else:
                 cleaned = sanitize_nre_phases(
                     list(st.session_state.nre_phases or [])
@@ -1259,7 +1465,7 @@ else:
                 opts_now = available_nre_phases(cleaned)
                 st.session_state.nre_phases = [
                     p for p in cleaned if p in opts_now
-                ] or [PHASES[0]]
+                ] or list(_nre_default_phases)
             nre_phase_options = available_nre_phases(
                 list(st.session_state.nre_phases or [])
             )
@@ -1268,6 +1474,8 @@ else:
                 nre_phase_options,
                 key="nre_phases",
                 help=(
+                    "Default: Concept, BU, CT, NT, OT. "
+                    "OT is listed with no tests / U-fit by default. "
                     "BU/CT hide BCT (and the reverse). "
                     "NT/OT hide NOT (and the reverse). "
                     "Generated columns always use order: "
@@ -1307,6 +1515,15 @@ else:
             for phase in nre_phases:
                 st.divider()
                 st.markdown(f"### {phase}")
+                func_def, gold_def = NRE_PHASE_OPTION_DEFAULTS.get(
+                    phase, ("Functional", "No")
+                )
+                func_key = f"nre_func_{phase}"
+                gold_key = f"nre_gold_{phase}"
+                if func_key not in st.session_state:
+                    st.session_state[func_key] = func_def
+                if gold_key not in st.session_state:
+                    st.session_state[gold_key] = gold_def
                 is_ocp = "OCP" in str(standard)
                 if is_ocp:
                     pc1, pc2, pc3 = st.columns(3)
@@ -1318,7 +1535,7 @@ else:
                         "Functional / Non-functional",
                         FUNCTIONALITY_OPTS,
                         horizontal=True,
-                        key=f"nre_func_{phase}",
+                        key=func_key,
                     )
                 if is_ocp and pc2 is not None:
                     with pc2:
@@ -1336,7 +1553,7 @@ else:
                         "Gold Rail Selection",
                         YES_NO,
                         horizontal=True,
-                        key=f"nre_gold_{phase}",
+                        key=gold_key,
                     )
 
                 ids_key = f"nre_ids_{phase}"
@@ -1350,9 +1567,13 @@ else:
                     if str(tid).strip() not in excluded
                     and str(tid).strip() not in NRE_SELECTOR_EXTRA_IDS
                 ]
+                empty_content_default = phase in NRE_EMPTY_CONTENT_DEFAULT_PHASES
                 if ids_key not in st.session_state:
-                    # Each newly added phase defaults to Select all for its own filters
-                    st.session_state[ids_key] = list(allowed_ids)
+                    # Most phases: Select all for current filters.
+                    # OT (and similar): start empty — still listed in NRE/HC.
+                    st.session_state[ids_key] = (
+                        [] if empty_content_default else list(allowed_ids)
+                    )
                 else:
                     # Drop selections that the current EIA/OCP · Func · Gold filters exclude
                     kept = [
@@ -1376,7 +1597,12 @@ else:
                         "Same filters as Test Plan: Standard (EIA/OCP), "
                         "Functional / Non-functional, and Gold Rail. "
                         "OM / DnP and U-fit quantity are below; "
-                        "fixture / rack costs are under Testing Phase."
+                        "fixture / rack costs are under Testing Phase. "
+                        + (
+                            "OT defaults to no test items (phase still listed)."
+                            if empty_content_default
+                            else ""
+                        )
                     ),
                 )
                 sel_col, clr_col, _ = st.columns([1, 1, 4])
@@ -1398,10 +1624,12 @@ else:
                     )
 
                 qty_by_id: dict[str, int] = {}
-                # U-fit / Leading Edge: default 1 for every phase (Gold Rail independent)
+                # U-fit / Leading Edge: default 1 (Gold Rail independent); OT → 0
                 ufit_key = f"nre_qty_ufit_{phase}"
                 if ufit_key not in st.session_state:
-                    st.session_state[ufit_key] = 1
+                    st.session_state[ufit_key] = (
+                        0 if empty_content_default else 1
+                    )
                 st.caption("Run of U-fit / Leading Edge")
                 qty_by_id[NRE_UFIT_ID] = int(
                     st.number_input(
@@ -1409,7 +1637,13 @@ else:
                         min_value=0,
                         step=1,
                         key=ufit_key,
-                        help="Default 1 for every phase (with or without Gold Rail).",
+                        help=(
+                            "Default 0 for OT; otherwise 1 "
+                            "(with or without Gold Rail)."
+                            if empty_content_default
+                            else "Default 1 for every phase "
+                            "(with or without Gold Rail)."
+                        ),
                     )
                 )
 
@@ -1467,7 +1701,8 @@ else:
                     if missing and has_phase:
                         st.warning(
                             "No NRE test content for: " + ", ".join(missing)
-                            + " — those phases will be skipped "
+                            + " — those columns stay in the NRE table and "
+                            "headcount with zero test hours "
                             "(fixture / rack still use the earliest phase)."
                         )
                     st.session_state.nre_df = build_nre_table(
@@ -1486,10 +1721,18 @@ else:
                         for cfg in phase_configs
                         if cfg.get("phase")
                     }
-                    # Re-seed HC defaults so NRE duration tasks match this generate
+                    st.session_state.hc_nre_func_by_phase = {
+                        str(cfg.get("phase", "")): str(
+                            cfg.get("functionality", "Functional")
+                        )
+                        for cfg in phase_configs
+                        if cfg.get("phase")
+                    }
+                    # Re-seed HC defaults so NRE duration / Baseline match this generate
                     _clear_hc_default_seeds()
                     # Clear previous headcount grid until user regenerates it
                     st.session_state.hc_df = None
+                    st.session_state.hc_detail_df = None
                     st.session_state.hc_table_phases = None
                     st.session_state.hc_table_months = None
                     st.session_state.hc_table_tasks = None
@@ -1522,11 +1765,6 @@ else:
                     "phase_configs": phase_configs,
                 }
                 xlsx_bytes = export_nre_xlsx(nre_df, meta)
-                nre_functional = ""
-                if phase_configs:
-                    nre_functional = ", ".join(
-                        f"{c['phase']}:{c['functionality']}" for c in phase_configs
-                    )
                 if st.download_button(
                     "Download NRE (XLSX template)",
                     data=xlsx_bytes,
@@ -1534,7 +1772,7 @@ else:
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     key="nre_dl_xlsx",
                 ):
-                    _record_download("NRE", functional=nre_functional)
+                    _record_download("NRE")
                     st.toast("Usage recorded · NRE")
 
                 # ---------------- Headcount (after NRE generate) ----------------
@@ -1544,10 +1782,23 @@ else:
                     list(st.session_state.hc_phases or selected_phases)
                 )
                 # Backfill NRE hours if missing (e.g. session from before this feature)
-                if not st.session_state.get("hc_nre_hours_by_phase") and phase_configs:
+                if (
+                    (
+                        not st.session_state.get("hc_nre_hours_by_phase")
+                        or not st.session_state.get("hc_nre_func_by_phase")
+                    )
+                    and phase_configs
+                ):
                     st.session_state.hc_nre_hours_by_phase = {
                         str(cfg.get("phase", "")): _nre_phase_hours(
                             cfg, info_map=info_map
+                        )
+                        for cfg in phase_configs
+                        if cfg.get("phase")
+                    }
+                    st.session_state.hc_nre_func_by_phase = {
+                        str(cfg.get("phase", "")): str(
+                            cfg.get("functionality", "Functional")
                         )
                         for cfg in phase_configs
                         if cfg.get("phase")
@@ -1556,11 +1807,15 @@ else:
                 st.caption(
                     "Phases follow the NRE testing-phase selection. "
                     "Each phase has its own months and engineer task lists. "
-                    "**NRE Test Item Duration** = (Σ NRE hours ÷ 160) HeadCount "
-                    "per Person × **2** people — on Structure for Concept / BU / "
-                    "BCT, on S&V for CT / NT / OT / NOT. "
-                    "**Per Month** adds the total to every month; **Per Phase** "
-                    "divides across a selected start→end span. "
+                    "**S&V Test** = (Σ NRE hours ÷ 160) × people "
+                    "(Structure **2** on Concept / BU / BCT; S&V **3** on CT / "
+                    "NT / OT / NOT). "
+                    "**Baseline** (S&V, CT→NOT): only if that phase has NRE "
+                    "tests — Functional **3×0.25**, Non-functional **3×0.1** "
+                    "Per Phase (NT and OT each independently). "
+                    "If system weight **> 91 kg (200 lbs)**, Number of "
+                    "HeadCount on those S&V Test / Baseline tasks is **+1**. "
+                    "**Per Month** / **Per Phase** distribute task totals. "
                     "Task total = **Number of HeadCount × HeadCount per Person**."
                 )
 
@@ -1580,10 +1835,9 @@ else:
                             step=1,
                             key=month_key,
                             help=(
-                                "Default 6 months for BCT / NOT; "
-                                "3 months otherwise."
-                                if phase in ("BCT", "NOT")
-                                else "Default 3 months."
+                                "Default 3 months."
+                                if phase in ("Concept", "BCT", "NOT")
+                                else "Default 2 months."
                             ),
                         )
                     )
@@ -1785,6 +2039,12 @@ else:
                             month_display=hc_month_display,
                             project_start_month=hc_project_start,
                         )
+                        st.session_state.hc_detail_df = (
+                            build_headcount_detail_table(
+                                hc_phases,
+                                tasks_by_phase=tasks_by_phase,
+                            )
+                        )
                         st.session_state.hc_table_phases = list(hc_phases)
                         st.session_state.hc_table_months = dict(hc_months)
                         st.session_state.hc_table_tasks = tasks_by_phase
@@ -1820,6 +2080,54 @@ else:
                         use_container_width=True,
                         hide_index=True,
                     )
+                    detail_df = st.session_state.get("hc_detail_df")
+                    if detail_df is None and st.session_state.get(
+                        "hc_table_tasks"
+                    ) is not None:
+                        detail_df = build_headcount_detail_table(
+                            list(
+                                st.session_state.get("hc_table_phases")
+                                or hc_phases
+                            ),
+                            tasks_by_phase=st.session_state.hc_table_tasks,
+                        )
+                        st.session_state.hc_detail_df = detail_df
+                    if detail_df is not None and not detail_df.empty:
+                        st.caption(
+                            "Headcount computation detail — one row per phase; "
+                            "tasks listed on separate lines in each engineer "
+                            "cell: "
+                            '**N. "Task": Ax  B HC / Manpower (per Month|Phase)** '
+                            "(total HC = A × B)."
+                        )
+                        _render_hc_detail_table(detail_df)
+
+                    hc_xlsx = export_headcount_xlsx(
+                        st.session_state.hc_df,
+                        detail_df
+                        if detail_df is not None
+                        else pd.DataFrame(),
+                    )
+                    if st.download_button(
+                        "Download Headcount (Excel)",
+                        data=hc_xlsx,
+                        file_name=(
+                            f"{_export_stem()}_Headcount_"
+                            f"{date.today().isoformat()}.xlsx"
+                        ),
+                        mime=(
+                            "application/vnd.openxmlformats-"
+                            "officedocument.spreadsheetml.sheet"
+                        ),
+                        key="hc_dl_xlsx",
+                        help=(
+                            "One Excel file with sheet **Headcount** (grid) "
+                            "and sheet **Detail** (task formulas). "
+                            "Multi-sheet export requires Excel format."
+                        ),
+                    ):
+                        _record_download("HC")
+                        st.toast("Usage recorded · HC")
                 else:
                     st.caption(
                         "Configure phase months and engineer tasks above, then "
